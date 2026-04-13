@@ -1,6 +1,7 @@
 import base64
 import json
-from fastapi import FastAPI, HTTPException
+import os
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
@@ -13,6 +14,7 @@ from app.session import (
 from app.teaching import get_teaching_response, stream_sentences
 from app.evaluator import evaluate_comprehension
 from app.tts import text_to_speech
+from app.stt import transcribe_audio
 
 app = FastAPI(title="MedLearn AI API")
 
@@ -78,6 +80,13 @@ def session_summary(session_id: str):
     if not summary:
         raise HTTPException(status_code=404, detail="Session not found")
     return summary
+
+@app.post("/api/stt")
+async def stt(audio: UploadFile = File(...)):
+    data = await audio.read()
+    suffix = os.path.splitext(audio.filename or ".webm")[1] or ".webm"
+    text = await transcribe_audio(data, suffix=suffix)
+    return {"text": text}
 
 @app.post("/api/tts")
 async def tts(req: TTSRequest):

@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { sendMessageStream } from "@/lib/api";
+import { sendMessageStream, transcribeAudio } from "@/lib/api";
 
 interface Objective {
   id: number;
@@ -25,27 +25,42 @@ export default function SessionPage() {
   const [currentObjective, setCurrentObjective] = useState<Objective | null>(null);
   const [objectives, setObjectives] = useState<Objective[]>([]);
   const [sessionComplete, setSessionComplete] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const greetingFired = useRef(false);
-  const audioQueue = useRef<HTMLAudioElement[]>([]);
-  const audioPlaying = useRef(false);
+  const audioCtx = useRef<AudioContext | null>(null);
+  const nextStartTime = useRef(0);
+  const mediaRecorder = useRef<MediaRecorder | null>(null);
+  const audioChunks = useRef<Blob[]>([]);
 
-  function enqueueAudio(wavBase64: string) {
-    const binary = atob(wavBase64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    const url = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
-    const audio = new Audio(url);
-    audio.onended = () => { URL.revokeObjectURL(url); playNextAudio(); };
-    audioQueue.current.push(audio);
-    if (!audioPlaying.current) playNextAudio();
+  function getAudioCtx(): AudioContext {
+    if (!audioCtx.current) audioCtx.current = new AudioContext();
+    return audioCtx.current;
   }
 
-  function playNextAudio() {
-    const next = audioQueue.current.shift();
-    if (!next) { audioPlaying.current = false; return; }
-    audioPlaying.current = true;
-    next.play().catch(() => playNextAudio());
+  async function enqueueAudio(wavBase64: string) {
+    try {
+      const ctx = getAudioCtx();
+      if (ctx.state === "suspended") await ctx.resume();
+
+      const binary = atob(wavBase64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+
+      // Decode while previous chunk is still playing
+      const audioBuffer = await ctx.decodeAudioData(bytes.buffer.slice(0));
+
+      // Schedule exactly after the previous chunk — zero gap
+      const startAt = Math.max(ctx.currentTime + 0.01, nextStartTime.current);
+      nextStartTime.current = startAt + audioBuffer.duration;
+
+      const source = ctx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(ctx.destination);
+      source.start(startAt);
+    } catch (e) {
+      console.error("Audio decode failed:", e);
+    }
   }
 
   useEffect(() => {
@@ -108,6 +123,35 @@ export default function SessionPage() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function toggleRecording() {
+    if (isRecording) {
+      mediaRecorder.current?.stop();
+      return;
+    }
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mimeType = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/ogg";
+    const recorder = new MediaRecorder(stream, { mimeType });
+    audioChunks.current = [];
+    recorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.current.push(e.data); };
+    recorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      setIsRecording(false);
+      if (!session || loading) return;
+      const blob = new Blob(audioChunks.current, { type: mimeType });
+      try {
+        const transcript = await transcribeAudio(blob);
+        if (!transcript.trim()) return;
+        setMessages(prev => [...prev, { role: "user", content: transcript }]);
+        await runStream(session.session_id, transcript);
+      } catch {
+        console.error("Transcription failed");
+      }
+    };
+    recorder.start();
+    mediaRecorder.current = recorder;
+    setIsRecording(true);
   }
 
   async function triggerGreeting(sessionId: string) {
@@ -275,9 +319,20 @@ export default function SessionPage() {
                   Send
                 </button>
               </div>
-              <p className="text-xs text-gray-400 mt-2 text-center">
-                Voice input coming soon · Powered by Gemma 4 · Fully offline
-              </p>
+              <div className="flex justify-center mt-2">
+                <button
+                  onClick={toggleRecording}
+                  disabled={loading}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors disabled:cursor-not-allowed ${
+                    isRecording
+                      ? "bg-red-100 text-red-600 hover:bg-red-200"
+                      : "bg-gray-100 text-gray-500 hover:bg-gray-200 disabled:bg-gray-50 disabled:text-gray-300"
+                  }`}
+                >
+                  <span className={`w-2 h-2 rounded-full ${isRecording ? "bg-red-500 animate-pulse" : "bg-gray-400"}`} />
+                  {isRecording ? "Recording — click to send" : "Click to speak"}
+                </button>
+              </div>
             </div>
           )}
 

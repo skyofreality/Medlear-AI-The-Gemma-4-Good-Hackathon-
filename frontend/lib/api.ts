@@ -26,6 +26,15 @@ export async function getSessionSummary(sessionId: string) {
   return res.json();
 }
 
+export async function transcribeAudio(blob: Blob): Promise<string> {
+  const form = new FormData();
+  form.append("audio", blob, "recording.webm");
+  const res = await fetch(`${API_BASE}/api/stt`, { method: "POST", body: form });
+  if (!res.ok) throw new Error("STT failed");
+  const data = await res.json();
+  return data.text as string;
+}
+
 export type StreamEvent =
   | { type: "text"; sentence: string }
   | { type: "audio"; wav: string }
