@@ -1,0 +1,14 @@
+node_modules/
+.next/
+venv/
+.venv/
+pycache/
+__pycache__/
+backend/venv/
+frontend/node_modules/
+frontend/.next/
+*.pyc
+.env
+*.onnx
+*.bin
+*.wav
