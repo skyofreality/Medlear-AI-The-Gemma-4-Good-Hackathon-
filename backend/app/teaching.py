@@ -3,6 +3,7 @@ import re
 from typing import AsyncGenerator
 import httpx
 from app.session import get_session, get_current_objective, add_message
+from app.rag import get_rag_context
 
 # Match end-of-sentence punctuation followed by whitespace or end of string
 _SENT_END = re.compile(r'(?<=[.!?])\s+')
@@ -10,8 +11,8 @@ _SENT_END = re.compile(r'(?<=[.!?])\s+')
 OLLAMA_URL = "http://localhost:11434/api/chat"
 MODEL = "gemma4:e4b"
 
-def build_system_prompt(objective: str, verb: str) -> str:
-    return f"""You are Dr. Mira, a Socratic medical tutor. You are teaching a medical student one specific objective at a time.
+def build_system_prompt(objective: str, verb: str, rag_context: str = "") -> str:
+    prompt = f"""You are Dr. Mira, a Socratic medical tutor. You are teaching a medical student one specific objective at a time.
 
 Your current objective: {verb} {objective}
 
@@ -24,6 +25,9 @@ Rules you must follow without exception:
 - Never move to a new topic. You only teach this one objective. The system will advance you when ready.
 - Speak naturally, like a tutor — not like a textbook.
 - Start the very first message by greeting the student and asking an opening question about the objective."""
+    if rag_context:
+        prompt += f"\n\nRELEVANT CURRICULUM MATERIAL:\n{rag_context}\n\nUse the above material to ground your teaching in the institution's actual curriculum."
+    return prompt
 
 async def get_teaching_response(session_id: str, student_message: str) -> str:
     session = get_session(session_id)
@@ -38,8 +42,9 @@ async def get_teaching_response(session_id: str, student_message: str) -> str:
     add_message(session_id, "user", student_message)
 
     # Build messages for Ollama
+    rag_context = get_rag_context(f"{current.verb} {current.objective}")
     messages = [
-        {"role": "system", "content": build_system_prompt(current.objective, current.verb)}
+        {"role": "system", "content": build_system_prompt(current.objective, current.verb, rag_context)}
     ]
 
     # Include conversation history (last 10 exchanges to stay within context)
@@ -83,8 +88,9 @@ async def stream_sentences(session_id: str, student_message: str) -> AsyncGenera
 
     add_message(session_id, "user", student_message)
 
+    rag_context = get_rag_context(f"{current.verb} {current.objective}")
     messages = [
-        {"role": "system", "content": build_system_prompt(current.objective, current.verb)}
+        {"role": "system", "content": build_system_prompt(current.objective, current.verb, rag_context)}
     ]
     messages.extend(session.conversation_history[-20:])
 

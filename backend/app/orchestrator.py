@@ -1,6 +1,7 @@
 import httpx
 import json
 from typing import Optional
+from app.rag import get_rag_context
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 MODEL = "gemma4:e4b"
@@ -28,6 +29,10 @@ async def generate_objectives(topic: str, assignment_text: Optional[str] = None)
     user_content = f"Topic: {topic}"
     if assignment_text:
         user_content += f"\n\nAssignment content to decompose:\n{assignment_text}"
+
+    rag_context = get_rag_context(topic)
+    if rag_context:
+        user_content = f"{rag_context}\n\nUsing the context above if relevant, {user_content}"
 
     payload = {
         "model": MODEL,

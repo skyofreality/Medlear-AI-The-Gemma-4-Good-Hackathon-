@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 import os
@@ -15,6 +16,7 @@ from app.teaching import get_teaching_response, stream_sentences
 from app.evaluator import evaluate_comprehension
 from app.tts import text_to_speech
 from app.stt import transcribe_audio
+from app.rag import ingest_pdf, query_rag
 
 app = FastAPI(title="MedLearn AI API")
 
@@ -124,6 +126,17 @@ async def chat_stream(req: ChatRequest):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+@app.post("/api/rag/ingest")
+async def rag_ingest(file: UploadFile = File(...)):
+    data = await file.read()
+    result = await asyncio.to_thread(ingest_pdf, data, file.filename or "upload.pdf")
+    return {"message": f"Indexed {result['chunks_indexed']} chunks from {result['filename']}"}
+
+@app.get("/api/rag/query")
+async def rag_query(q: str):
+    chunks = await asyncio.to_thread(query_rag, q)
+    return {"chunks": chunks}
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
