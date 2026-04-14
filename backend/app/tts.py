@@ -29,6 +29,20 @@ async def text_to_speech(text: str, voice: str = "af_heart") -> bytes:
     return await asyncio.to_thread(_synthesize, text, voice)
 
 
+def generate_alignment(text: str, audio_bytes: bytes) -> dict:
+    """Generate approximate character-level timing from already-synthesized WAV bytes."""
+    with wave.open(io.BytesIO(audio_bytes)) as wf:
+        duration = wf.getnframes() / wf.getframerate()
+    chars = list(text.replace(" ", ""))
+    n = len(chars) if chars else 1
+    char_duration = duration / n
+    return {
+        "chars": chars,
+        "char_start_times_seconds": [i * char_duration for i in range(n)],
+        "char_durations_seconds": [char_duration] * n,
+    }
+
+
 def _synthesize_with_timing(text: str, voice: str) -> dict:
     """Return base64 WAV + approximate character-level timing."""
     audio_bytes = _synthesize(text, voice)

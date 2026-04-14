@@ -14,7 +14,7 @@ from app.session import (
 )
 from app.teaching import get_teaching_response, stream_sentences
 from app.evaluator import evaluate_comprehension
-from app.tts import text_to_speech, text_to_speech_with_timing
+from app.tts import text_to_speech, text_to_speech_with_timing, generate_alignment
 from app.stt import transcribe_audio
 from app.rag import ingest_pdf, query_rag
 
@@ -119,7 +119,8 @@ async def chat_stream(req: ChatRequest):
             # Synthesize and send audio for this sentence
             try:
                 wav = await text_to_speech(sentence)
-                yield f"data: {json.dumps({'type': 'audio', 'wav': base64.b64encode(wav).decode()})}\n\n"
+                alignment = generate_alignment(sentence, wav)
+                yield f"data: {json.dumps({'type': 'audio', 'wav': base64.b64encode(wav).decode(), 'alignment': alignment})}\n\n"
             except Exception:
                 pass  # audio failure is non-fatal
 

@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { sendMessageStream, transcribeAudio, fetchSpeechWithTiming } from "@/lib/api";
+import { sendMessageStream, transcribeAudio } from "@/lib/api";
 import TalkingHeadAvatar, { AvatarHandle } from "@/components/TalkingHeadAvatar";
 
 interface Objective {
@@ -73,6 +73,8 @@ export default function SessionPage() {
               return updated;
             });
           }
+        } else if (event.type === "audio") {
+          avatarRef.current?.speak(event.wav, event.alignment);
         } else if (event.type === "eval") {
           if (event.evaluation?.advanced) {
             setObjectives(prev => prev.map(o =>
@@ -83,13 +85,6 @@ export default function SessionPage() {
           }
           if (event.current_objective) setCurrentObjective(event.current_objective);
           if (event.session_complete) setSessionComplete(true);
-        }
-      }
-      // After full response is streamed, get TTS with timing and speak
-      if (fullText && avatarRef.current) {
-        const ttsData = await fetchSpeechWithTiming(fullText);
-        if (ttsData && avatarRef.current) {
-          avatarRef.current.speak(ttsData.audio_base64, ttsData.alignment);
         }
       }
     } catch {

@@ -74,7 +74,7 @@ export async function fetchSpeechBlob(text: string): Promise<Blob | null> {
 
 export type StreamEvent =
   | { type: "text"; sentence: string }
-  | { type: "audio"; wav: string }
+  | { type: "audio"; wav: string; alignment: { chars: string[]; char_start_times_seconds: number[]; char_durations_seconds: number[] } }
   | { type: "eval"; evaluation: any; current_objective: any; session_complete: boolean }
   | { type: "done" };
 
