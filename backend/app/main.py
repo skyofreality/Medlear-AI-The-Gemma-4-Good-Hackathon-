@@ -14,7 +14,7 @@ from app.session import (
 )
 from app.teaching import get_teaching_response, stream_sentences
 from app.evaluator import evaluate_comprehension
-from app.tts import text_to_speech
+from app.tts import text_to_speech, text_to_speech_with_timing
 from app.stt import transcribe_audio
 from app.rag import ingest_pdf, query_rag
 
@@ -95,6 +95,14 @@ async def tts(req: TTSRequest):
     try:
         audio_bytes = await text_to_speech(req.text, req.voice)
         return Response(content=audio_bytes, media_type="audio/wav")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/tts/with-timing")
+async def tts_with_timing(req: TTSRequest):
+    try:
+        result = await text_to_speech_with_timing(req.text, req.voice)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

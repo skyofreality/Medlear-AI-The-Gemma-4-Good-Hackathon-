@@ -28,8 +28,7 @@ def _safe_parse(raw: str) -> dict:
     raw = raw.strip()
     if raw.startswith("```"):
         parts = raw.split("```")
-        # parts[1] is the content between first pair of fences
-        raw = parts[1]
+        raw = parts[1] if len(parts) > 1 else raw
         if raw.startswith("json"):
             raw = raw[4:]
     raw = raw.strip()

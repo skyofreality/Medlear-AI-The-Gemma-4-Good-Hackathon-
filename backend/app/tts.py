@@ -1,6 +1,7 @@
 import asyncio
 import io
 import os
+import wave
 import soundfile as sf
 from kokoro_onnx import Kokoro
 
@@ -26,3 +27,33 @@ def _synthesize(text: str, voice: str) -> bytes:
 
 async def text_to_speech(text: str, voice: str = "af_heart") -> bytes:
     return await asyncio.to_thread(_synthesize, text, voice)
+
+
+def _synthesize_with_timing(text: str, voice: str) -> dict:
+    """Return base64 WAV + approximate character-level timing."""
+    audio_bytes = _synthesize(text, voice)
+
+    # Measure actual audio duration from WAV header
+    with wave.open(io.BytesIO(audio_bytes)) as wf:
+        duration = wf.getnframes() / wf.getframerate()
+
+    # Distribute duration evenly across non-space characters
+    import base64
+    chars = list(text.replace(" ", ""))
+    n = len(chars) if chars else 1
+    char_duration = duration / n
+    start_times = [i * char_duration for i in range(n)]
+    durations = [char_duration] * n
+
+    return {
+        "audio_base64": base64.b64encode(audio_bytes).decode(),
+        "alignment": {
+            "chars": chars,
+            "char_start_times_seconds": start_times,
+            "char_durations_seconds": durations,
+        },
+    }
+
+
+async def text_to_speech_with_timing(text: str, voice: str = "af_heart") -> dict:
+    return await asyncio.to_thread(_synthesize_with_timing, text, voice)

@@ -1,3 +1,4 @@
+import asyncio
 import httpx
 import json
 from typing import Optional
@@ -30,7 +31,7 @@ async def generate_objectives(topic: str, assignment_text: Optional[str] = None)
     if assignment_text:
         user_content += f"\n\nAssignment content to decompose:\n{assignment_text}"
 
-    rag_context = get_rag_context(topic)
+    rag_context = await asyncio.to_thread(get_rag_context, topic)
     if rag_context:
         user_content = f"{rag_context}\n\nUsing the context above if relevant, {user_content}"
 
@@ -52,7 +53,8 @@ async def generate_objectives(topic: str, assignment_text: Optional[str] = None)
 
     # Strip markdown code fences if model adds them
     if raw.startswith("```"):
-        raw = raw.split("```")[1]
+        parts = raw.split("```")
+        raw = parts[1] if len(parts) > 1 else raw
         if raw.startswith("json"):
             raw = raw[4:]
     raw = raw.strip()

@@ -35,6 +35,43 @@ export async function transcribeAudio(blob: Blob): Promise<string> {
   return data.text as string;
 }
 
+export async function fetchSpeechWithTiming(text: string): Promise<{
+  audio_base64: string;
+  alignment: {
+    chars: string[];
+    char_start_times_seconds: number[];
+    char_durations_seconds: number[];
+  };
+} | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/tts/with-timing`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, voice: "af_heart" }),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (e) {
+    console.error("TTS with timing failed:", e);
+    return null;
+  }
+}
+
+export async function fetchSpeechBlob(text: string): Promise<Blob | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/tts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, voice: "af_heart" }),
+    });
+    if (!res.ok) return null;
+    return await res.blob();
+  } catch (e) {
+    console.error("TTS fetch failed:", e);
+    return null;
+  }
+}
+
 export type StreamEvent =
   | { type: "text"; sentence: string }
   | { type: "audio"; wav: string }
