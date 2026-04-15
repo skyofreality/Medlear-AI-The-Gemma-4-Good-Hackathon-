@@ -14,11 +14,17 @@ from app.session import (
 )
 from app.teaching import get_teaching_response, stream_sentences
 from app.evaluator import evaluate_comprehension
-from app.tts import text_to_speech, text_to_speech_with_timing, generate_alignment
+from app.tts import text_to_speech, text_to_speech_with_timing, generate_alignment, _get_piper, TTS_PROVIDER
 from app.stt import transcribe_audio
 from app.rag import ingest_pdf, query_rag
 
 app = FastAPI(title="MedLearn AI API")
+
+@app.on_event("startup")
+async def warmup():
+    """Pre-load the TTS model so the first user request isn't slow."""
+    if TTS_PROVIDER == "piper":
+        await asyncio.to_thread(_get_piper)
 
 app.add_middleware(
     CORSMiddleware,
@@ -114,15 +120,15 @@ async def chat_stream(req: ChatRequest):
 
     async def generate():
         async for sentence in stream_sentences(req.session_id, req.message):
-            # Send text sentence immediately
+            # Send text immediately
             yield f"data: {json.dumps({'type': 'text', 'sentence': sentence})}\n\n"
-            # Synthesize and send audio for this sentence
+            # Synthesize audio for this sentence, then send it
             try:
                 wav = await text_to_speech(sentence)
                 alignment = generate_alignment(sentence, wav)
-                yield f"data: {json.dumps({'type': 'audio', 'wav': base64.b64encode(wav).decode(), 'alignment': alignment})}\n\n"
+                yield f"data: {json.dumps({'type': 'audio', 'wav': base64.b64encode(wav).decode(), 'alignment': alignment, 'sentence': sentence})}\n\n"
             except Exception:
-                pass  # audio failure is non-fatal
+                pass
 
         # Run evaluator after full response is saved to history
         eval_result = await evaluate_comprehension(req.session_id)

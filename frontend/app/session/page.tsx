@@ -74,7 +74,7 @@ export default function SessionPage() {
             });
           }
         } else if (event.type === "audio") {
-          avatarRef.current?.speak(event.wav, event.alignment);
+          avatarRef.current?.speak(event.wav, event.sentence);
         } else if (event.type === "eval") {
           if (event.evaluation?.advanced) {
             setObjectives(prev => prev.map(o =>
