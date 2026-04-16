@@ -35,12 +35,32 @@ const TalkingHeadAvatar = forwardRef<AvatarHandle, Props>((props, ref) => {
         // Decode through TalkingHead's own AudioContext so timing is in sync
         const audioBuffer = await headRef.current.audioCtx.decodeAudioData(bytes.buffer);
 
-        // Distribute audio duration evenly across words
+        // Distribute audio duration proportionally by character count.
+        // This is a much better proxy for spoken duration than uniform distribution:
+        // "a" (1 char) should not get the same time as "understanding" (13 chars).
+        // A minimum floor (MIN_WORD_MS) prevents function words from getting zero time.
         const durationMs = audioBuffer.duration * 1000;
         const words = sentence.split(/\s+/).filter(w => w.length > 0);
-        const wordDuration = words.length > 0 ? durationMs / words.length : durationMs;
-        const wtimes = words.map((_, i) => i * wordDuration);
-        const wdurations = words.map(() => wordDuration);
+        const wtimes: number[] = [];
+        const wdurations: number[] = [];
+        if (words.length === 0) {
+          // nothing to do
+        } else if (words.length === 1) {
+          wtimes.push(0);
+          wdurations.push(durationMs);
+        } else {
+          // Each word gets MIN_WORD_MS guaranteed, rest split by char count
+          const MIN_WORD_MS = 80;
+          const totalChars = words.reduce((sum, w) => sum + w.length, 0) || 1;
+          const flexMs = durationMs - MIN_WORD_MS * words.length;
+          let t = 0;
+          for (const w of words) {
+            const dur = MIN_WORD_MS + (w.length / totalChars) * flexMs;
+            wtimes.push(t);
+            wdurations.push(dur);
+            t += dur;
+          }
+        }
 
         // speakAudio is synchronous (pushes to internal queue) — do NOT await
         // Visemes are omitted: TalkingHead computes them from words internally
