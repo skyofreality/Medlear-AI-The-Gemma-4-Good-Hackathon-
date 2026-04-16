@@ -1,7 +1,10 @@
 import asyncio
 import base64
+import io
 import json
 import os
+import random
+import re
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
@@ -12,9 +15,9 @@ from app.session import (
     create_session, get_session, get_current_objective,
     get_session_summary
 )
-from app.teaching import get_teaching_response, stream_sentences
+from app.teaching import get_teaching_response, stream_sentences, stream_teaching_response
 from app.evaluator import evaluate_comprehension
-from app.tts import text_to_speech, text_to_speech_with_timing, generate_alignment, _get_piper, TTS_PROVIDER
+from app.tts import text_to_speech, get_kokoro
 from app.stt import transcribe_audio
 from app.rag import ingest_pdf, query_rag
 
@@ -22,9 +25,8 @@ app = FastAPI(title="MedLearn AI API")
 
 @app.on_event("startup")
 async def warmup():
-    """Pre-load the TTS model so the first user request isn't slow."""
-    if TTS_PROVIDER == "piper":
-        await asyncio.to_thread(_get_piper)
+    """Pre-load the Kokoro model so the first user request isn't slow."""
+    await asyncio.to_thread(get_kokoro)
 
 app.add_middleware(
     CORSMiddleware,
@@ -45,6 +47,9 @@ class ChatRequest(BaseModel):
 class TTSRequest(BaseModel):
     text: str
     voice: str = "af_heart"
+
+class EvaluateRequest(BaseModel):
+    session_id: str
 
 @app.get("/")
 def root():
@@ -107,10 +112,131 @@ async def tts(req: TTSRequest):
 @app.post("/api/tts/with-timing")
 async def tts_with_timing(req: TTSRequest):
     try:
-        result = await text_to_speech_with_timing(req.text, req.voice)
+        import wave
+        audio_bytes = await text_to_speech(req.text, req.voice)
+        with wave.open(io.BytesIO(audio_bytes)) as wf:
+            duration = wf.getnframes() / wf.getframerate()
+        chars = list(req.text.replace(" ", ""))
+        n = len(chars) if chars else 1
+        char_dur = duration / n
+        return {
+            "audio_base64": base64.b64encode(audio_bytes).decode(),
+            "alignment": {
+                "chars": chars,
+                "char_start_times_seconds": [i * char_dur for i in range(n)],
+                "char_durations_seconds": [char_dur] * n,
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+def clean_for_speech(text: str) -> str:
+    text = re.sub(r'\*+', '', text)
+    text = re.sub(r'#+\s*', '', text)
+    text = re.sub(r'`+', '', text)
+    text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
+    text = re.sub(r'_+', '', text)
+    text = ' '.join(text.split())
+    return text.strip()
+
+
+async def generate(session_id: str, user_message: str):
+    """
+    Pipelined SSE generator.
+    llm_task  — streams raw tokens, buffers into sentences, pushes to sentence_queue
+    tts_task  — pulls sentences, synthesizes audio, pushes SSE events
+    Both run concurrently via asyncio.gather so the LLM never waits for TTS.
+    """
+    sentence_queue: asyncio.Queue = asyncio.Queue()
+    events: asyncio.Queue = asyncio.Queue()
+    SENTINEL = None
+
+    _ABBR = re.compile(r'\b(Dr|Mr|Mrs|Ms|Prof|vs|etc|e\.g|i\.e|mg|mL|kg|mmHg|bpm|Fig|No|Vol)\.$')
+
+    async def llm_task():
+        buffer = ""
+        try:
+            async for token in stream_teaching_response(session_id, user_message):
+                buffer += token
+
+                while True:
+                    # Require: punctuation + whitespace + uppercase/quote start
+                    # This confirms the word before the period is complete and
+                    # a new sentence is actually beginning.
+                    match = re.search(r'([^.!?]*[.!?])\s+(?=\S)', buffer)
+                    if not match:
+                        break
+
+                    sentence = match.group(1).strip()
+                    buffer = buffer[match.end():].strip()
+
+                    if len(sentence) < 12:
+                        buffer = sentence + " " + buffer
+                        break
+
+                    if _ABBR.search(sentence):
+                        buffer = sentence + " " + buffer
+                        break
+
+                    sentence = clean_for_speech(sentence)
+                    await events.put(f"data: {json.dumps({'type': 'text', 'content': sentence})}\n\n")
+                    await sentence_queue.put(sentence)
+        finally:
+            remaining = clean_for_speech(buffer)
+            if len(remaining) > 12:
+                await events.put(f"data: {json.dumps({'type': 'text', 'content': remaining})}\n\n")
+                await sentence_queue.put(remaining)
+            await sentence_queue.put(SENTINEL)
+
+    async def tts_task():
+        while True:
+            sentence = await sentence_queue.get()
+            if sentence is SENTINEL:
+                await events.put(f"data: {json.dumps({'type': 'done'})}\n\n")
+                await events.put(SENTINEL)
+                break
+            try:
+                audio_bytes = await text_to_speech(sentence)
+                audio_b64 = base64.b64encode(audio_bytes).decode()
+                await events.put(f"data: {json.dumps({'type': 'audio', 'content': audio_b64, 'text': sentence})}\n\n")
+            except Exception as e:
+                print(f"TTS error: {e}")
+            sentence_queue.task_done()
+
+    llm = asyncio.create_task(llm_task())
+    tts = asyncio.create_task(tts_task())
+
+    while True:
+        event = await events.get()
+        if event is SENTINEL:
+            break
+        yield event
+
+    await asyncio.gather(llm, tts)
+
+
+@app.get("/api/stream")
+async def stream_chat(session_id: str, message: str):
+    return StreamingResponse(
+        generate(session_id, message),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/evaluate")
+async def evaluate(req: EvaluateRequest):
+    session = get_session(req.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    try:
+        result = await evaluate_comprehension(req.session_id)
+        current = get_current_objective(req.session_id)
+        result["current_objective"] = current.dict() if current else None
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/api/chat/stream")
 async def chat_stream(req: ChatRequest):
@@ -125,8 +251,7 @@ async def chat_stream(req: ChatRequest):
             # Synthesize audio for this sentence, then send it
             try:
                 wav = await text_to_speech(sentence)
-                alignment = generate_alignment(sentence, wav)
-                yield f"data: {json.dumps({'type': 'audio', 'wav': base64.b64encode(wav).decode(), 'alignment': alignment, 'sentence': sentence})}\n\n"
+                yield f"data: {json.dumps({'type': 'audio', 'wav': base64.b64encode(wav).decode(), 'sentence': sentence})}\n\n"
             except Exception:
                 pass
 
@@ -134,6 +259,25 @@ async def chat_stream(req: ChatRequest):
         eval_result = await evaluate_comprehension(req.session_id)
         current = get_current_objective(req.session_id)
         yield f"data: {json.dumps({'type': 'eval', 'evaluation': eval_result, 'current_objective': current.dict() if current else None, 'session_complete': eval_result.get('session_complete', False)})}\n\n"
+
+        # If the student just advanced, give Dr. Mira a beat to acknowledge it
+        # before the student's next message lands on the new objective cold.
+        if eval_result.get('advanced') and current and not eval_result.get('session_complete'):
+            _transitions = [
+                f"Okay, moving on — {current.verb} {current.objective}. Let's see what you've got.",
+                f"Nice. Next up: {current.verb} {current.objective}. Same energy.",
+                f"Alright, level up. Now we're on: {current.verb} {current.objective}.",
+                f"Good. Let's keep going — {current.verb} {current.objective}.",
+                f"See? You had it. Next: {current.verb} {current.objective}.",
+            ]
+            transition = random.choice(_transitions)
+            yield f"data: {json.dumps({'type': 'text', 'sentence': transition})}\n\n"
+            try:
+                wav = await text_to_speech(transition)
+                yield f"data: {json.dumps({'type': 'audio', 'wav': base64.b64encode(wav).decode(), 'sentence': transition})}\n\n"
+            except Exception:
+                pass
+
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
     return StreamingResponse(
