@@ -19,7 +19,7 @@ from app.teaching import get_teaching_response, stream_sentences, stream_teachin
 from app.evaluator import evaluate_comprehension
 from app.tts import text_to_speech, get_kokoro
 from app.stt import transcribe_audio
-from app.rag import ingest_pdf, query_rag
+from app.rag import ingest_pdf_vision, query_rag
 
 app = FastAPI(title="MedLearn AI API")
 
@@ -289,8 +289,8 @@ async def chat_stream(req: ChatRequest):
 @app.post("/api/rag/ingest")
 async def rag_ingest(file: UploadFile = File(...)):
     data = await file.read()
-    result = await asyncio.to_thread(ingest_pdf, data, file.filename or "upload.pdf")
-    return {"message": f"Indexed {result['chunks_indexed']} chunks from {result['filename']}"}
+    result = await asyncio.to_thread(ingest_pdf_vision, data, file.filename or "upload.pdf")
+    return {"message": f"Indexed {result['chunks_indexed']} chunks from {result['filename']}", "chunks_indexed": result['chunks_indexed'], "filename": result['filename']}
 
 @app.get("/api/rag/query")
 async def rag_query(q: str):

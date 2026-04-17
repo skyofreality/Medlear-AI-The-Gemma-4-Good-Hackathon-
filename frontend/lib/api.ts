@@ -140,6 +140,17 @@ export async function* streamResponse(
   }
 }
 
+export async function ingestPDF(file: File): Promise<{ message: string; chunks_indexed: number; filename: string }> {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  const res = await fetch(`${API_BASE}/api/rag/ingest`, { method: "POST", body: form });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Upload failed" }));
+    throw new Error(err.detail ?? "Upload failed");
+  }
+  return res.json();
+}
+
 export async function evaluateSession(sessionId: string): Promise<any> {
   const res = await fetch(`${API_BASE}/api/evaluate`, {
     method: "POST",
