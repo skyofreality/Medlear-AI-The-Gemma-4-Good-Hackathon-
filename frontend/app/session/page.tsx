@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { sendMessageStream, transcribeAudio, fetchSpeechWithTiming } from "@/lib/api";
+import { streamResponse, transcribeAudio, evaluateSession, fetchSpeechWithTiming } from "@/lib/api";
 import TalkingHeadAvatar, { AvatarHandle } from "@/components/TalkingHeadAvatar";
 
 interface Objective {
@@ -52,20 +52,20 @@ export default function SessionPage() {
   async function runStream(sessionId: string, userMessage: string, isGreeting = false) {
     setLoading(true);
     let fullText = "";
-    let firstSentence = true;
+    let firstTextEvent = true;
 
     try {
-      for await (const event of sendMessageStream(sessionId, userMessage)) {
+      for await (const event of streamResponse(sessionId, userMessage)) {
         if (event.type === "text") {
-          fullText += (fullText ? " " : "") + event.sentence;
-          if (firstSentence) {
+          fullText += (fullText ? " " : "") + event.content;
+          if (firstTextEvent) {
             if (isGreeting) {
               setMessages([{ role: "assistant", content: fullText }]);
             } else {
               setMessages(prev => [...prev, { role: "assistant", content: fullText }]);
             }
             setLoading(false);
-            firstSentence = false;
+            firstTextEvent = false;
           } else {
             setMessages(prev => {
               const updated = [...prev];
@@ -73,23 +73,30 @@ export default function SessionPage() {
               return updated;
             });
           }
-        } else if (event.type === "eval") {
-          if (event.evaluation?.advanced) {
-            setObjectives(prev => prev.map(o =>
-              o.id === currentObjective?.id
-                ? { ...o, completed: true, comprehension_score: event.evaluation.score }
-                : o
-            ));
+        } else if (event.type === "audio") {
+          avatarRef.current?.speak(event.content, event.text);
+        } else if (event.type === "done") {
+          // Evaluate comprehension now that the full response is in history
+          try {
+            const evalResult = await evaluateSession(sessionId);
+            if (evalResult.advanced) {
+              setObjectives(prev => prev.map((o: any) =>
+                o.id === currentObjective?.id
+                  ? { ...o, completed: true, comprehension_score: evalResult.score }
+                  : o
+              ));
+            }
+            if (evalResult.current_objective) setCurrentObjective(evalResult.current_objective);
+            if (evalResult.session_complete) setSessionComplete(true);
+            // Speak transition message if student advanced to a new objective
+            if (evalResult.transition_message) {
+              setMessages(prev => [...prev, { role: "assistant", content: evalResult.transition_message }]);
+              const tts = await fetchSpeechWithTiming(evalResult.transition_message);
+              if (tts) avatarRef.current?.speak(tts.audio_base64, evalResult.transition_message);
+            }
+          } catch {
+            console.error("Evaluation failed");
           }
-          if (event.current_objective) setCurrentObjective(event.current_objective);
-          if (event.session_complete) setSessionComplete(true);
-        }
-      }
-      // After full response is streamed, get TTS with timing and speak
-      if (fullText && avatarRef.current) {
-        const ttsData = await fetchSpeechWithTiming(fullText);
-        if (ttsData && avatarRef.current) {
-          avatarRef.current.speak(ttsData.audio_base64, ttsData.alignment);
         }
       }
     } catch {

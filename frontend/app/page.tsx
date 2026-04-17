@@ -1,13 +1,31 @@
 "use client";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { startSession } from "@/lib/api";
+import { startSession, ingestPDF } from "@/lib/api";
 
 export default function Home() {
   const router = useRouter();
   const [topic, setTopic] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<{ ok: boolean; msg: string } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  async function handleUpload() {
+    if (!uploadFile) return;
+    setUploading(true);
+    setUploadStatus(null);
+    try {
+      const result = await ingestPDF(uploadFile);
+      setUploadStatus({ ok: true, msg: `Indexed ${result.chunks_indexed} chunks from ${result.filename}` });
+    } catch (e: any) {
+      setUploadStatus({ ok: false, msg: e.message ?? "Upload failed" });
+    } finally {
+      setUploading(false);
+    }
+  }
 
   async function handleStart() {
     if (!topic.trim()) return;
@@ -76,11 +94,55 @@ export default function Home() {
             <div className="flex-1 h-px bg-gray-200" />
           </div>
 
-          <div className="border-2 border-dashed border-gray-200 rounded-xl p-6 
-                          text-center text-gray-400 text-sm cursor-not-allowed">
-            Upload assignment PDF
-            <p className="text-xs mt-1 text-gray-300">Coming in Phase 2</p>
+          <div
+            className="border-2 border-dashed border-gray-200 hover:border-teal-400 rounded-xl p-6
+                        text-center text-sm transition-colors cursor-pointer"
+            onClick={() => fileInputRef.current?.click()}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault();
+              const f = e.dataTransfer.files[0];
+              if (f?.type === "application/pdf") { setUploadFile(f); setUploadStatus(null); }
+            }}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0] ?? null;
+                setUploadFile(f);
+                setUploadStatus(null);
+              }}
+            />
+            {uploadFile ? (
+              <span className="text-gray-700 font-medium">{uploadFile.name}</span>
+            ) : (
+              <>
+                <span className="text-gray-400">Upload assignment PDF</span>
+                <p className="text-xs mt-1 text-gray-300">Click or drag and drop</p>
+              </>
+            )}
           </div>
+
+          {uploadFile && !uploadStatus && (
+            <button
+              onClick={handleUpload}
+              disabled={uploading}
+              className="w-full mt-3 bg-gray-100 hover:bg-gray-200 disabled:bg-gray-50
+                         text-gray-700 font-medium py-2.5 rounded-xl transition-colors
+                         text-sm disabled:cursor-not-allowed"
+            >
+              {uploading ? "Indexing with Gemma Vision..." : "Index PDF"}
+            </button>
+          )}
+
+          {uploadStatus && (
+            <p className={`text-xs mt-2 ${uploadStatus.ok ? "text-teal-600" : "text-red-500"}`}>
+              {uploadStatus.msg}
+            </p>
+          )}
 
         </div>
 

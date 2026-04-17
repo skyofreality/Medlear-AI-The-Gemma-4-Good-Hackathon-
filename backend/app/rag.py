@@ -1,10 +1,16 @@
+import base64
 import os
 import fitz  # PyMuPDF
 import chromadb
+import httpx
 from chromadb.utils.embedding_functions import EmbeddingFunction
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
 from typing import Any
+
+OLLAMA_URL = "http://localhost:11434/api/chat"
+VISION_MODEL = "gemma4:e4b"
+_VISION_SPARSE_THRESHOLD = 100  # chars; below this, use vision instead of raw text
 
 # ── Singletons ────────────────────────────────────────────────────────────────
 
@@ -57,6 +63,80 @@ def ingest_pdf(file_bytes: bytes, filename: str) -> dict:
     metadatas = [{"filename": filename, "chunk_index": i} for i in range(len(chunks))]
 
     # ChromaDB max batch size is 5461 — upsert in safe batches
+    BATCH_SIZE = 5000
+    for start in range(0, len(chunks), BATCH_SIZE):
+        end = start + BATCH_SIZE
+        collection.upsert(
+            ids=ids[start:end],
+            documents=chunks[start:end],
+            embeddings=embeddings[start:end],
+            metadatas=metadatas[start:end],
+        )
+
+    return {"chunks_indexed": len(chunks), "filename": filename}
+
+
+def _vision_extract_page(page_b64: str) -> str:
+    """Call Ollama vision model on a base64-encoded PNG page image."""
+    payload = {
+        "model": VISION_MODEL,
+        "messages": [{
+            "role": "user",
+            "content": (
+                "Extract all text from this medical document page. "
+                "Also describe any diagrams, charts, tables, or figures clearly. "
+                "Output only the extracted content, no commentary."
+            ),
+            "images": [page_b64],
+        }],
+        "stream": False,
+    }
+    with httpx.Client(timeout=120.0) as client:
+        resp = client.post(OLLAMA_URL, json=payload)
+        resp.raise_for_status()
+        return resp.json()["message"]["content"]
+
+
+def ingest_pdf_vision(file_bytes: bytes, filename: str) -> dict:
+    """
+    Hybrid extraction: PyMuPDF text for text-rich pages,
+    Gemma4 vision for sparse/scanned pages. Chunks and indexes to ChromaDB.
+    """
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    pages_text = []
+
+    for page in doc:
+        text = page.get_text().strip()
+        if len(text) < _VISION_SPARSE_THRESHOLD:
+            # Render at 150 DPI and run through vision model
+            mat = fitz.Matrix(150 / 72, 150 / 72)
+            pix = page.get_pixmap(matrix=mat)
+            img_b64 = base64.b64encode(pix.tobytes("png")).decode()
+            try:
+                pages_text.append(_vision_extract_page(img_b64))
+            except Exception:
+                pages_text.append(text)
+        else:
+            pages_text.append(text)
+
+    doc.close()
+    full_text = "\n\n".join(pages_text)
+
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=512, chunk_overlap=50, length_function=len
+    )
+    chunks = splitter.split_text(full_text)
+
+    if not chunks:
+        return {"chunks_indexed": 0, "filename": filename}
+
+    embedder = _get_embedder()
+    collection = _get_collection()
+
+    embeddings = embedder.encode(chunks, show_progress_bar=False).tolist()
+    ids = [f"{filename}::{i}" for i in range(len(chunks))]
+    metadatas = [{"filename": filename, "chunk_index": i} for i in range(len(chunks))]
+
     BATCH_SIZE = 5000
     for start in range(0, len(chunks), BATCH_SIZE):
         end = start + BATCH_SIZE

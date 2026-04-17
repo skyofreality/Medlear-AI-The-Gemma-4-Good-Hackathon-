@@ -1,14 +1,8 @@
 "use client";
 import { useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
 
-export interface AlignmentData {
-  chars: string[];
-  char_start_times_seconds: number[];
-  char_durations_seconds: number[];
-}
-
 export interface AvatarHandle {
-  speak: (audioBase64: string, alignment: AlignmentData) => Promise<void>;
+  speak: (audioBase64: string, sentence: string) => Promise<void>;
   stop: () => void;
 }
 
@@ -21,72 +15,61 @@ interface Props {
 const TalkingHeadAvatar = forwardRef<AvatarHandle, Props>((props, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const headRef = useRef<any>(null);
-  const lipsyncRef = useRef<any>(null);
-  const speechTimerRef = useRef<any>(null);
   const modelUrl = props.modelUrl ?? "/dani.glb";
 
   useImperativeHandle(ref, () => ({
-    speak: async (audioBase64: string, alignment: AlignmentData) => {
+    speak: async (audioBase64: string, sentence: string) => {
       if (!headRef.current) return;
       props.onStart?.();
       try {
-        // 1. Convert Base64 to ArrayBuffer and decode via avatar's AudioContext
+        // Decode base64 WAV → ArrayBuffer
         const binary = window.atob(audioBase64);
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-        const audioBuffer = await headRef.current.audioCtx.decodeAudioData(bytes.buffer);
 
-        // 2. Process character alignment into word-level timing
-        const { words, wtimes, wdurations } = processAlignmentToWords(alignment);
-
-        // 3. Use LipsyncEn to convert words to visemes with precise timing
-        const allVisemes: any[] = [];
-        const allVTimes: number[] = [];
-        const allVDurations: number[] = [];
-
-        if (lipsyncRef.current) {
-          words.forEach((word, index) => {
-            const wordStartTime = wtimes[index];
-            const wordDuration = wdurations[index];
-            const wordVisData = lipsyncRef.current.wordsToVisemes(word);
-            const totalUnits = wordVisData.durations.reduce((a: any, b: any) => a + b, 0);
-            const unitInMs = totalUnits > 0 ? wordDuration / totalUnits : 0;
-            let currentOffset = 0;
-            wordVisData.visemes.forEach((vis: any, i: number) => {
-              allVisemes.push(vis);
-              allVTimes.push(wordStartTime + currentOffset * unitInMs);
-              const visDur = wordVisData.durations[i] * unitInMs;
-              allVDurations.push(visDur);
-              currentOffset += wordVisData.durations[i];
-            });
-          });
-        }
-
-        // 4. Combine into the final syncData object
-        const syncData = {
-          audio: audioBuffer,
-          words,
-          wtimes,
-          wdurations,
-          visemes: allVisemes,
-          vtimes: allVTimes,
-          vdurations: allVDurations,
-          audioEncoding: "wav",
-        };
-
-        // 5. Resume context if suspended, then play
+        // Resume AudioContext if browser suspended it (autoplay policy)
         if (headRef.current.audioCtx.state === 'suspended') {
           await headRef.current.audioCtx.resume();
         }
-        const totalDuration = allVDurations.reduce((acc, d) => acc + d, 0);
 
-        await headRef.current.speakAudio(syncData);
+        // Decode through TalkingHead's own AudioContext so timing is in sync
+        const audioBuffer = await headRef.current.audioCtx.decodeAudioData(bytes.buffer);
 
-        if (speechTimerRef.current) clearTimeout(speechTimerRef.current);
-        speechTimerRef.current = setTimeout(() => {
-          if (props.onComplete) props.onComplete();
-          speechTimerRef.current = null;
-        }, totalDuration);
+        // Distribute audio duration proportionally by character count.
+        // This is a much better proxy for spoken duration than uniform distribution:
+        // "a" (1 char) should not get the same time as "understanding" (13 chars).
+        // A minimum floor (MIN_WORD_MS) prevents function words from getting zero time.
+        const durationMs = audioBuffer.duration * 1000;
+        const words = sentence.split(/\s+/).filter(w => w.length > 0);
+        const wtimes: number[] = [];
+        const wdurations: number[] = [];
+        if (words.length === 0) {
+          // nothing to do
+        } else if (words.length === 1) {
+          wtimes.push(0);
+          wdurations.push(durationMs);
+        } else {
+          // Each word gets MIN_WORD_MS guaranteed, rest split by char count
+          const MIN_WORD_MS = 80;
+          const totalChars = words.reduce((sum, w) => sum + w.length, 0) || 1;
+          const flexMs = durationMs - MIN_WORD_MS * words.length;
+          let t = 0;
+          for (const w of words) {
+            const dur = MIN_WORD_MS + (w.length / totalChars) * flexMs;
+            wtimes.push(t);
+            wdurations.push(dur);
+            t += dur;
+          }
+        }
+
+        // speakAudio is synchronous (pushes to internal queue) — do NOT await
+        // Visemes are omitted: TalkingHead computes them from words internally
+        headRef.current.speakAudio(
+          { audio: audioBuffer, words, wtimes, wdurations },
+          { lipsyncLang: "en" }
+        );
+
+        props.onComplete?.();
       } catch (error) {
         console.error("Avatar speech error:", error);
       }
@@ -105,12 +88,6 @@ const TalkingHeadAvatar = forwardRef<AvatarHandle, Props>((props, ref) => {
 
     async function init() {
       try {
-        // Load LipsyncEn as a native browser ES module
-        const lipsyncMod = await (new Function('return import("/lipsync-en.mjs")')() as Promise<any>);
-        if (!isMounted) return;
-        lipsyncRef.current = new lipsyncMod.LipsyncEn();
-
-        // Load TalkingHead as a native browser ES module
         const { TalkingHead } = await (new Function('return import("/talkinghead.mjs")')() as Promise<any>);
         if (!isMounted) return;
 
@@ -145,7 +122,6 @@ const TalkingHeadAvatar = forwardRef<AvatarHandle, Props>((props, ref) => {
 
     return () => {
       isMounted = false;
-      if (speechTimerRef.current) clearTimeout(speechTimerRef.current);
       if (headRef.current) {
         headRef.current.stop();
         headRef.current = null;
@@ -158,41 +134,3 @@ const TalkingHeadAvatar = forwardRef<AvatarHandle, Props>((props, ref) => {
 
 TalkingHeadAvatar.displayName = "TalkingHeadAvatar";
 export default TalkingHeadAvatar;
-
-// Convert character-level alignment from backend into word-level timing (ms)
-const processAlignmentToWords = (alignment: AlignmentData) => {
-  const words: string[] = [];
-  const wtimes: number[] = [];
-  const wdurations: number[] = [];
-
-  const chars = alignment.chars;
-  const starts = alignment.char_start_times_seconds;
-
-  let currentWord = "";
-  let wordStartTime = 0;
-
-  chars.forEach((char: string, i: number) => {
-    const startTimeMs = starts[i] * 1000;
-
-    if (currentWord === "" && char !== " ") {
-      wordStartTime = startTimeMs;
-    }
-
-    const isSpace = char === " ";
-    const isLastChar = i === chars.length - 1;
-
-    if (isSpace || isLastChar) {
-      if (isLastChar && !isSpace) currentWord += char;
-      if (currentWord !== "") {
-        words.push(currentWord);
-        wtimes.push(wordStartTime);
-        wdurations.push(startTimeMs - wordStartTime + (isLastChar ? 100 : 0));
-        currentWord = "";
-      }
-    } else {
-      currentWord += char;
-    }
-  });
-
-  return { words, wtimes, wdurations };
-};

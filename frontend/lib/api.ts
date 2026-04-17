@@ -74,7 +74,7 @@ export async function fetchSpeechBlob(text: string): Promise<Blob | null> {
 
 export type StreamEvent =
   | { type: "text"; sentence: string }
-  | { type: "audio"; wav: string }
+  | { type: "audio"; wav: string; sentence: string; alignment: { chars: string[]; char_start_times_seconds: number[]; char_durations_seconds: number[] } }
   | { type: "eval"; evaluation: any; current_objective: any; session_complete: boolean }
   | { type: "done" };
 
@@ -105,4 +105,58 @@ export async function* sendMessageStream(
       }
     }
   }
+}
+
+// ── Pipelined stream (LLM and TTS run concurrently) ──────────────────────────
+
+export type PipelineEvent =
+  | { type: "text"; content: string }
+  | { type: "audio"; content: string; text: string; alignment: { chars: string[]; char_start_times_seconds: number[]; char_durations_seconds: number[] } }
+  | { type: "done" };
+
+export async function* streamResponse(
+  sessionId: string,
+  message: string
+): AsyncGenerator<PipelineEvent> {
+  const url = `${API_BASE}/api/stream?session_id=${encodeURIComponent(sessionId)}&message=${encodeURIComponent(message)}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Stream failed");
+
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split("\n");
+    buf = lines.pop() ?? "";
+    for (const line of lines) {
+      if (line.startsWith("data: ")) {
+        try { yield JSON.parse(line.slice(6)) as PipelineEvent; } catch {}
+      }
+    }
+  }
+}
+
+export async function ingestPDF(file: File): Promise<{ message: string; chunks_indexed: number; filename: string }> {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  const res = await fetch(`${API_BASE}/api/rag/ingest`, { method: "POST", body: form });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Upload failed" }));
+    throw new Error(err.detail ?? "Upload failed");
+  }
+  return res.json();
+}
+
+export async function evaluateSession(sessionId: string): Promise<any> {
+  const res = await fetch(`${API_BASE}/api/evaluate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId }),
+  });
+  if (!res.ok) throw new Error("Evaluate failed");
+  return res.json();
 }

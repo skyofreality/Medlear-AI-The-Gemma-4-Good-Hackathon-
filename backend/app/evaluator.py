@@ -18,6 +18,7 @@ Scoring rules:
 - If the student copy-pasted a textbook definition without showing reasoning: score 0.2 max
 - If the student answered in their own words with correct reasoning: score 0.75 minimum
 - If the student has only just said hello or has not yet answered anything: score 0.0
+- Require at least 3 student responses demonstrating understanding before scoring above 0.85. One correct answer is not enough — the student must show consistent understanding across multiple exchanges.
 
 Output format:
 {"score": 0.0, "satisfied": false, "reason": "one sentence explanation", "probe": "one follow-up question if not satisfied, or null if satisfied"}"""
@@ -98,8 +99,17 @@ Evaluate whether the student has demonstrated genuine understanding of the objec
         result.setdefault("reason", "")
         result.setdefault("probe", None)
 
+        # Require minimum 3 student messages before any advancement
+        student_messages = [m for m in session.conversation_history if m["role"] == "user"]
+        if len(student_messages) < 3:
+            result["score"] = min(result["score"], 0.75)
+            result["satisfied"] = False
+            result["advanced"] = False
+            result["session_complete"] = False
+            return result
+
         # Advance session if evaluator is satisfied
-        if result["satisfied"] and result["score"] >= 0.75:
+        if result["satisfied"] and result["score"] >= 0.85:
             session_complete = advance_session(session_id, result["score"])
             result["advanced"] = True
             result["session_complete"] = session_complete
