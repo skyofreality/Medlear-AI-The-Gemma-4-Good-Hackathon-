@@ -17,7 +17,7 @@ from app.session import (
 )
 from app.teaching import get_teaching_response, stream_sentences, stream_teaching_response
 from app.evaluator import evaluate_comprehension
-from app.tts import text_to_speech, get_kokoro
+from app.tts import text_to_speech, get_pipeline
 from app.stt import transcribe_audio
 from app.rag import ingest_pdf_vision, query_rag
 
@@ -26,7 +26,7 @@ app = FastAPI(title="MedLearn AI API")
 @app.on_event("startup")
 async def warmup():
     """Pre-load the Kokoro model so the first user request isn't slow."""
-    await asyncio.to_thread(get_kokoro)
+    await asyncio.to_thread(get_pipeline)
 
 app.add_middleware(
     CORSMiddleware,
@@ -136,6 +136,13 @@ def clean_for_speech(text: str) -> str:
     text = re.sub(r'`+', '', text)
     text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
     text = re.sub(r'_+', '', text)
+    # Remove stage directions in square brackets e.g. [Dr. Mira sighs]
+    text = re.sub(r'\[([^\]]*)\]', '', text)
+
+    # Remove stage directions in parentheses e.g. (sighs deeply)
+    text = re.sub(r'\(([^)]*(?:sighs|laughs|pauses|rubs|leans|looks|smiles|frowns|rolls|shakes|nods|gestures|waves|points|crosses)[^)]*)\)', '', text, flags=re.IGNORECASE)
+
+    # Clean up any double spaces left behind
     text = ' '.join(text.split())
     return text.strip()
 
