@@ -47,7 +47,7 @@ export async function fetchSpeechWithTiming(text: string): Promise<{
     const res = await fetch(`${API_BASE}/api/tts/with-timing`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, voice: "af_heart" }),
+      body: JSON.stringify({ text, voice: "af_bella" }),
     });
     if (!res.ok) return null;
     return await res.json();

@@ -15,7 +15,7 @@ def get_pipeline():
 def _synthesize(text: str, voice: str) -> bytes:
     """Synchronous synthesis — runs in a thread pool via asyncio.to_thread."""
     pipeline = get_pipeline()
-    chunks = [audio for _, _, audio in pipeline(text, voice=voice, speed=1.0)]
+    chunks = [audio for _, _, audio in pipeline(text, voice=voice, speed=0.93)]
     audio = np.concatenate(chunks)
     buffer = io.BytesIO()
     sf.write(buffer, audio, 24000, format="WAV")

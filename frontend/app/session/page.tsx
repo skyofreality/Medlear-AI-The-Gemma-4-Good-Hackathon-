@@ -32,6 +32,31 @@ export default function SessionPage() {
   const mediaRecorder = useRef<MediaRecorder | null>(null);
   const audioChunks = useRef<Blob[]>([]);
   const avatarRef = useRef<AvatarHandle>(null);
+  const moodTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function setMoodTemporary(mood: string, durationMs = 6000) {
+    if (moodTimerRef.current) clearTimeout(moodTimerRef.current);
+    avatarRef.current?.setMood(mood);
+    moodTimerRef.current = setTimeout(() => {
+      avatarRef.current?.setMood("neutral");
+    }, durationMs);
+  }
+
+  function detectMoodFromText(text: string): string | null {
+    const t = text.toLowerCase();
+    if (/\b(exactly|brilliant|perfect|great job|well done|yes!|correct|nice work|good|right)\b/.test(t)) return "happy";
+    if (/\b(wrong|no,|not quite|that's not|vague|incorrect|nope|hmm, no)\b/.test(t)) return "sad";
+    if (/\b(seriously\?|come on|really\?|you're not|wake up|pay attention)\b/.test(t)) return "angry";
+    return null;
+  }
+
+  function resetInactivityTimer() {
+    if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
+    inactivityTimerRef.current = setTimeout(() => {
+      avatarRef.current?.setMood("angry");
+    }, 90000);
+  }
 
   useEffect(() => {
     const stored = localStorage.getItem("medlearn_session");
@@ -43,6 +68,11 @@ export default function SessionPage() {
     if (greetingFired.current) return;
     greetingFired.current = true;
     triggerGreeting(s.session_id);
+    resetInactivityTimer();
+    return () => {
+      if (moodTimerRef.current) clearTimeout(moodTimerRef.current);
+      if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
+    };
   }, []);
 
   useEffect(() => {
@@ -51,6 +81,7 @@ export default function SessionPage() {
 
   async function runStream(sessionId: string, userMessage: string, isGreeting = false) {
     setLoading(true);
+    avatarRef.current?.setMood("neutral");
     let fullText = "";
     let firstTextEvent = true;
 
@@ -73,10 +104,12 @@ export default function SessionPage() {
               return updated;
             });
           }
+          // Detect mood from Dr. Mira's sentence
+          const sentenceMood = detectMoodFromText(event.content);
+          if (sentenceMood) setMoodTemporary(sentenceMood, 5000);
         } else if (event.type === "audio") {
           avatarRef.current?.speak(event.content, event.text);
         } else if (event.type === "done") {
-          // Evaluate comprehension now that the full response is in history
           try {
             const evalResult = await evaluateSession(sessionId);
             if (evalResult.advanced) {
@@ -85,10 +118,14 @@ export default function SessionPage() {
                   ? { ...o, completed: true, comprehension_score: evalResult.score }
                   : o
               ));
+              setMoodTemporary("happy", 7000);
+            } else if (evalResult.score < 0.35) {
+              setMoodTemporary("angry", 6000);
+            } else if (evalResult.score < 0.55) {
+              setMoodTemporary("sad", 5000);
             }
             if (evalResult.current_objective) setCurrentObjective(evalResult.current_objective);
             if (evalResult.session_complete) setSessionComplete(true);
-            // Speak transition message if student advanced to a new objective
             if (evalResult.transition_message) {
               setMessages(prev => [...prev, { role: "assistant", content: evalResult.transition_message }]);
               const tts = await fetchSpeechWithTiming(evalResult.transition_message);
@@ -124,6 +161,7 @@ export default function SessionPage() {
       try {
         const transcript = await transcribeAudio(blob);
         if (!transcript.trim()) return;
+        resetInactivityTimer();
         setMessages(prev => [...prev, { role: "user", content: transcript }]);
         await runStream(session.session_id, transcript);
       } catch {
@@ -143,6 +181,7 @@ export default function SessionPage() {
     if (!input.trim() || loading || !session) return;
     const userMessage = input.trim();
     setInput("");
+    resetInactivityTimer();
     setMessages(prev => [...prev, { role: "user", content: userMessage }]);
     await runStream(session.session_id, userMessage);
   }

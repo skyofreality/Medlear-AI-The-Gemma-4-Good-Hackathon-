@@ -3135,9 +3135,9 @@ class TalkingHead {
             const val = this.lipsyncWordsToVisemes(wrd, lipsyncLang);
             if ( val && val.visemes && val.visemes.length ) {
               const dTotal = val.times[ val.visemes.length-1 ] + val.durations[ val.visemes.length-1 ];
-              const overdrive = Math.min(duration, Math.max( 0, duration - val.visemes.length * 150));
-              let level = 0.6 + this.convertRange( overdrive, [0,duration], [0,0.4]);
-              duration = Math.min( duration, val.visemes.length * 200 );
+              const overdrive = Math.min(duration, Math.max( 0, duration - val.visemes.length * 120));
+              let level = 0.75 + this.convertRange( overdrive, [0,duration], [0,0.25]);
+              duration = Math.min( duration, val.visemes.length * 280 );
               if ( dTotal > 0 ) {
                 for( let j=0; j<val.visemes.length; j++ ) {
                   const t = time + (val.times[j]/dTotal) * duration;

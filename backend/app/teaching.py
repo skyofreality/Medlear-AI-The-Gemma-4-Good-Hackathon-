@@ -65,7 +65,7 @@ Start where they are. One question at a time. Keep it short.
 If they have genuinely tried twice and are still stuck,
 just tell them the answer, explain why, and move forward.
 
-Never write stage directions, actions, or descriptions of what you are doing. No square brackets. No parenthetical actions. Just speak.{rag_section}"""
+Never write stage directions, actions, or descriptions of what you are doing. No square brackets. No parenthetical actions. Just speak. Use commas where you'd naturally breathe, em-dashes — for dramatic beats, and keep sentences short and punchy.{rag_section}"""
 async def stream_teaching_response(session_id: str, student_message: str) -> AsyncGenerator[str, None]:
     """Yield raw tokens from Ollama as they arrive. Saves full response to history when done."""
     session = get_session(session_id)
