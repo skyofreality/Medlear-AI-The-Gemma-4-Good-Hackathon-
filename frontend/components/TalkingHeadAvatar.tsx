@@ -4,6 +4,7 @@ import { useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
 export interface AvatarHandle {
   speak: (audioBase64: string, sentence: string) => Promise<void>;
   stop: () => void;
+  setMood: (mood: string) => void;
 }
 
 interface Props {
@@ -69,6 +70,9 @@ const TalkingHeadAvatar = forwardRef<AvatarHandle, Props>((props, ref) => {
         headRef.current.stop();
         props.onComplete?.();
       }
+    },
+    setMood: (mood: string) => {
+      try { headRef.current?.setMood(mood); } catch {}
     },
   }));
 
