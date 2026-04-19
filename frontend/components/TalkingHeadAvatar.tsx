@@ -22,35 +22,27 @@ const TalkingHeadAvatar = forwardRef<AvatarHandle, Props>((props, ref) => {
       if (!headRef.current) return;
       props.onStart?.();
       try {
-        // Decode base64 WAV → ArrayBuffer
         const binary = window.atob(audioBase64);
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
 
-        // Resume AudioContext if browser suspended it (autoplay policy)
         if (headRef.current.audioCtx.state === 'suspended') {
           await headRef.current.audioCtx.resume();
         }
 
-        // Decode through TalkingHead's own AudioContext so timing is in sync
         const audioBuffer = await headRef.current.audioCtx.decodeAudioData(bytes.buffer);
 
-        // Distribute audio duration proportionally by character count.
-        // This is a much better proxy for spoken duration than uniform distribution:
-        // "a" (1 char) should not get the same time as "understanding" (13 chars).
-        // A minimum floor (MIN_WORD_MS) prevents function words from getting zero time.
         const durationMs = audioBuffer.duration * 1000;
-        const words = sentence.split(/\s+/).filter(w => w.length > 0);
+        const words = sentence.split(/\s+/)
+          .map(w => w.replace(/[^a-zA-Z0-9']/g, ''))
+          .filter(w => w.length > 0);
         const wtimes: number[] = [];
         const wdurations: number[] = [];
-        if (words.length === 0) {
-          // nothing to do
-        } else if (words.length === 1) {
+        if (words.length === 1) {
           wtimes.push(0);
           wdurations.push(durationMs);
-        } else {
-          // Each word gets MIN_WORD_MS guaranteed, rest split by char count
-          const MIN_WORD_MS = 80;
+        } else if (words.length > 1) {
+          const MIN_WORD_MS = 130;
           const totalChars = words.reduce((sum, w) => sum + w.length, 0) || 1;
           const flexMs = durationMs - MIN_WORD_MS * words.length;
           let t = 0;
@@ -62,8 +54,6 @@ const TalkingHeadAvatar = forwardRef<AvatarHandle, Props>((props, ref) => {
           }
         }
 
-        // speakAudio is synchronous (pushes to internal queue) — do NOT await
-        // Visemes are omitted: TalkingHead computes them from words internally
         headRef.current.speakAudio(
           { audio: audioBuffer, words, wtimes, wdurations },
           { lipsyncLang: "en" }

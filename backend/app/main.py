@@ -23,6 +23,11 @@ from app.rag import ingest_pdf_vision, query_rag
 
 app = FastAPI(title="MedLearn AI API")
 
+# ── Change this to test different voices ─────────────────────────────────────
+# American female: af_bella, af_sarah, af_heart, af_sky, af_nicole
+# American male:   am_adam, am_michael
+AVATAR_VOICE = "af_bella"
+
 @app.on_event("startup")
 async def warmup():
     """Pre-load the Kokoro model so the first user request isn't slow."""
@@ -203,7 +208,7 @@ async def generate(session_id: str, user_message: str):
                 await events.put(SENTINEL)
                 break
             try:
-                audio_bytes = await text_to_speech(sentence)
+                audio_bytes = await text_to_speech(sentence, AVATAR_VOICE)
                 audio_b64 = base64.b64encode(audio_bytes).decode()
                 await events.put(f"data: {json.dumps({'type': 'audio', 'content': audio_b64, 'text': sentence})}\n\n")
             except Exception as e:
