@@ -11,3 +11,5 @@ __pycache__/
 *.onnx
 *.bin
 *.wav
+.claude/
+CLAUDE.md
