@@ -1,4 +1,4 @@
-const API_BASE = "http://localhost:8000";
+const API_BASE = "";
 
 export async function startSession(topic: string, assignmentText?: string) {
   const res = await fetch(`${API_BASE}/api/session/start`, {
