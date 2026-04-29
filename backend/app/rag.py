@@ -80,15 +80,30 @@ def _vision_extract_page(page_b64: str) -> str:
     """Call Ollama vision model on a base64-encoded PNG page image."""
     payload = {
         "model": VISION_MODEL,
-        "messages": [{
-            "role": "user",
-            "content": (
-                "Extract all text from this medical document page. "
-                "Also describe any diagrams, charts, tables, or figures clearly. "
-                "Output only the extracted content, no commentary."
-            ),
-            "images": [page_b64],
-        }],
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a medical textbook OCR and diagram analysis assistant. Your job is to extract and describe the content of medical textbook pages with complete accuracy.\n\n"
+                    "Follow these rules:\n"
+                    "- Preserve all medical terminology exactly as written — do not paraphrase or simplify anatomical terms, drug names, units (e.g. mEq/L, mmHg, IU), or abbreviations (e.g. q.d., p.o., IV)\n"
+                    "- For text-heavy pages: extract all readable text in reading order, preserving headings, subheadings, and paragraph structure\n"
+                    "- For diagram or figure pages: describe the diagram systematically — name the structure, list all labeled components, describe spatial relationships between parts, and note any arrows or flow directions\n"
+                    "- For tables: reproduce the table structure as plain text with clear row/column separation\n"
+                    "- For pages mixing text and diagrams: extract text first, then describe any figures below it\n"
+                    "- Do not add interpretation, clinical commentary, or information not visible on the page"
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    "Extract all text from this medical document page. "
+                    "Also describe any diagrams, charts, tables, or figures clearly. "
+                    "Output only the extracted content, no commentary."
+                ),
+                "images": [page_b64],
+            },
+        ],
         "stream": False,
     }
     with httpx.Client(timeout=120.0) as client:
