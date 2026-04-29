@@ -44,7 +44,7 @@ async def generate_objectives(topic: str, assignment_text: Optional[str] = None)
         ]
     }
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with httpx.AsyncClient(timeout=300.0) as client:
         response = await client.post(OLLAMA_URL, json=payload)
         response.raise_for_status()
         data = response.json()

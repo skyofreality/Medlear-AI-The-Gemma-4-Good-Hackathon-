@@ -5,6 +5,7 @@ import json
 import os
 import random
 import re
+import traceback
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
@@ -74,6 +75,7 @@ async def start_session(req: TopicRequest):
             "current_objective": current.dict() if current else None
         }
     except Exception as e:
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/session/{session_id}")
