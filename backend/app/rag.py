@@ -8,7 +8,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
 from typing import Any
 
-OLLAMA_URL = "http://localhost:11434/api/chat"
+OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434") + "/api/chat"
 VISION_MODEL = "gemma4:e4b"
 _VISION_SPARSE_THRESHOLD = 100  # chars; below this, use vision instead of raw text
 

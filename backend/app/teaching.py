@@ -24,7 +24,8 @@ def _is_abbrev_boundary(sentence: str) -> bool:
     # Known abbreviations not caught by length check
     return word in {'etc', 'fig', 'vol', 'approx', 'prof', 'dept', 'vs', 'cf'}
 
-OLLAMA_URL = "http://localhost:11434/api/chat"
+import os
+OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434") + "/api/chat"
 MODEL = "gemma4:e4b"
 
 def build_system_prompt(objective: str, verb: str, rag_context: str = "") -> str:

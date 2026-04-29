@@ -1,8 +1,9 @@
 import httpx
 import json
+import os
 from app.session import get_session, get_current_objective, advance_session
 
-OLLAMA_URL = "http://localhost:11434/api/chat"
+OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434") + "/api/chat"
 MODEL = "gemma4:e4b"
 
 EVALUATOR_SYSTEM_PROMPT = """You are a silent medical education evaluator. You read a conversation between a medical tutor and a student and assess whether the student has genuinely understood the current learning objective.

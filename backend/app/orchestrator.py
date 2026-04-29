@@ -1,10 +1,11 @@
 import asyncio
 import httpx
 import json
+import os
 from typing import Optional
 from app.rag import get_rag_context
 
-OLLAMA_URL = "http://localhost:11434/api/chat"
+OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434") + "/api/chat"
 MODEL = "gemma4:e4b"
 
 ORCHESTRATOR_SYSTEM_PROMPT = """You are a medical education orchestrator. Your sole job is to decompose a medical topic or assignment into a precise, ordered list of micro-objectives for a medical student to learn.
