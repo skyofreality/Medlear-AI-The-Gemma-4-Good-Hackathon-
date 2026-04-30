@@ -27,14 +27,6 @@ export default function SessionPage() {
   const [objectives, setObjectives] = useState<Objective[]>([]);
   const [sessionComplete, setSessionComplete] = useState(false);
   const [sessionSummary, setSessionSummary] = useState("");
-  const [pendingAdvancement, setPendingAdvancement] = useState<{
-    evaluation: any,
-    nextObjective: any,
-    sessionComplete: boolean,
-    sessionSummary: string,
-    transition: string,
-    transitionAudio: string
-  } | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const greetingFired = useRef(false);
@@ -128,8 +120,6 @@ export default function SessionPage() {
       nextObjective: any,
       sessionComplete: boolean,
       sessionSummary: string,
-      transition: string,
-      transitionAudio: string,
       prevObjectiveId: number | undefined,
     } | null = null;
 
@@ -137,12 +127,6 @@ export default function SessionPage() {
       for await (const event of sendMessageStream(sessionId, userMessage)) {
         if (event.type === "text") {
           const sentence = (event as any).sentence as string;
-          if (pendingLocal) {
-            pendingLocal.transition = pendingLocal.transition
-              ? pendingLocal.transition + " " + sentence
-              : sentence;
-            continue;
-          }
           fullText += (fullText ? " " : "") + sentence;
           if (firstTextEvent) {
             if (isGreeting) {
@@ -163,10 +147,6 @@ export default function SessionPage() {
           if (sentenceMood) setMoodTemporary(sentenceMood, 5000);
         } else if (event.type === "audio") {
           const audioEvent = event as any;
-          if (pendingLocal) {
-            pendingLocal.transitionAudio = audioEvent.wav;
-            continue;
-          }
           scheduleSpeak(audioEvent.wav, audioEvent.sentence);
         } else if (event.type === "eval") {
           const ev = event as any;
@@ -177,12 +157,8 @@ export default function SessionPage() {
               nextObjective: ev.current_objective,
               sessionComplete: !!ev.session_complete,
               sessionSummary: ev.session_summary || "",
-              transition: "",
-              transitionAudio: "",
               prevObjectiveId: currentObjective?.id,
             };
-            setPendingAdvancement(pendingLocal);
-            setLoading(true);
           } else {
             if (evalData.score < 0.35) {
               setMoodTemporary("angry", 6000);
@@ -215,7 +191,6 @@ export default function SessionPage() {
             }
             fullText = "";
             firstTextEvent = true;
-            setPendingAdvancement(null);
             pendingLocal = null;
           }
         }
