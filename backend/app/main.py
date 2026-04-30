@@ -2,8 +2,8 @@ import asyncio
 import base64
 import io
 import json
+import logging
 import os
-import random
 import re
 import traceback
 from dotenv import load_dotenv
@@ -16,7 +16,7 @@ from typing import Optional
 from app.orchestrator import generate_objectives
 from app.session import (
     create_session, get_session, get_current_objective,
-    get_session_summary
+    get_session_summary, generate_session_summary
 )
 from app.teaching import get_teaching_response, stream_sentences, stream_teaching_response
 from app.evaluator import evaluate_comprehension
@@ -271,28 +271,17 @@ async def chat_stream(req: ChatRequest):
             except Exception:
                 pass
 
-        # Run evaluator after full response is saved to history
         eval_result = await evaluate_comprehension(req.session_id)
         current = get_current_objective(req.session_id)
-        yield f"data: {json.dumps({'type': 'eval', 'evaluation': eval_result, 'current_objective': current.dict() if current else None, 'session_complete': eval_result.get('session_complete', False)})}\n\n"
 
-        # If the student just advanced, give Dr. Mira a beat to acknowledge it
-        # before the student's next message lands on the new objective cold.
-        if eval_result.get('advanced') and current and not eval_result.get('session_complete'):
-            _transitions = [
-                f"Okay, moving on — {current.verb} {current.objective}. Let's see what you've got.",
-                f"Nice. Next up: {current.verb} {current.objective}. Same energy.",
-                f"Alright, level up. Now we're on: {current.verb} {current.objective}.",
-                f"Good. Let's keep going — {current.verb} {current.objective}.",
-                f"See? You had it. Next: {current.verb} {current.objective}.",
-            ]
-            transition = random.choice(_transitions)
-            yield f"data: {json.dumps({'type': 'text', 'sentence': transition})}\n\n"
+        session_summary = ""
+        if eval_result.get('session_complete'):
             try:
-                wav = await text_to_speech(transition)
-                yield f"data: {json.dumps({'type': 'audio', 'wav': base64.b64encode(wav).decode(), 'sentence': transition})}\n\n"
-            except Exception:
-                pass
+                session_summary = await generate_session_summary(req.session_id)
+            except Exception as e:
+                logging.error(f"Session summary generation failed: {e}")
+
+        yield f"data: {json.dumps({'type': 'eval', 'evaluation': eval_result, 'current_objective': current.dict() if current else None, 'session_complete': eval_result.get('session_complete', False), 'session_summary': session_summary})}\n\n"
 
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
 

@@ -1,9 +1,16 @@
+import asyncio
+import httpx
+import logging
+import os
 import uuid
 from typing import Optional
 from pydantic import BaseModel
 
+OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434") + "/api/chat"
+MODEL = "gemma4:e4b"
+
 class Objective(BaseModel):
-    id: int
+    id: int = 0
     verb: str
     objective: str
     completed: bool = False
@@ -25,6 +32,9 @@ def create_session(topic: str, objectives_data: dict) -> Session:
     objectives = [
         Objective(**obj) for obj in objectives_data["objectives"]
     ]
+    # Always assign sequential ids — don't trust tool output
+    for i, obj in enumerate(objectives):
+        obj.id = i + 1
     session = Session(
         session_id=session_id,
         topic=topic,
@@ -55,15 +65,85 @@ def advance_session(session_id: str, comprehension_score: float) -> bool:
     session = get_session(session_id)
     if not session:
         return False
-    
+
+    if session.completed:
+        logging.warning(
+            f"advance_session called on completed session "
+            f"(session={session_id}) — ignoring"
+        )
+        return True
+
+    current_obj = session.objectives[session.current_index]
+    if current_obj.completed:
+        logging.warning(
+            f"advance_session called on already-completed objective "
+            f"(session={session_id}, index={session.current_index}) — ignoring"
+        )
+        return session.completed
+
     session.objectives[session.current_index].completed = True
     session.objectives[session.current_index].comprehension_score = comprehension_score
     session.current_index += 1
-    
+
     if session.current_index >= len(session.objectives):
         session.completed = True
         return True
     return False
+
+async def generate_session_summary(session_id: str) -> str:
+    """
+    Uses Gemma 4 to generate a personalized summary of the student's
+    session performance. Called when a session completes.
+    Returns a summary string.
+    """
+    session = get_session(session_id)
+    if not session:
+        return f"You completed your session. Review any objectives marked as needing more work before your next session."
+
+    objectives_text = "\n".join([
+        f"- {o.verb} {o.objective}: {'mastered' if o.comprehension_score >= 0.75 else 'needs more work'} (score: {o.comprehension_score:.2f})"
+        for o in session.objectives
+    ])
+
+    system_prompt = (
+        "You are a supportive medical education tutor reviewing a student's study session. "
+        "Write a brief, honest, personalized summary of their performance.\n\n"
+        "Rules:\n"
+        "- 3 to 5 sentences maximum\n"
+        "- Be specific — name the actual objectives they struggled with or excelled at, do not speak in generalities\n"
+        "- Be encouraging but accurate — do not praise poor performance\n"
+        "- Use plain student-friendly language, no jargon about scoring\n"
+        "- Do not mention numbers or scores directly\n"
+        "- End with one concrete suggestion for what to review next"
+    )
+
+    user_message = (
+        f"Topic: {session.topic}\n\n"
+        f"Objectives and performance:\n{objectives_text}\n\n"
+        "Write a personalized summary for this student."
+    )
+
+    payload = {
+        "model": MODEL,
+        "stream": False,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ],
+        "options": {"temperature": 0.4},
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(OLLAMA_URL, json=payload)
+            response.raise_for_status()
+            data = response.json()
+        summary = data["message"]["content"].strip()
+        logging.info(f"Session summary generated for session {session_id}")
+        return summary
+    except Exception:
+        return f"You completed your session on {session.topic}. Review any objectives marked as needing more work before your next session."
+
 
 def get_session_summary(session_id: str) -> dict:
     session = get_session(session_id)

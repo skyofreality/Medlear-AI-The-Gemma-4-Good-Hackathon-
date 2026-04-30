@@ -1,10 +1,11 @@
 import asyncio
 import json
+import logging
 import re
 from typing import AsyncGenerator
 import httpx
 from app.session import get_session, get_current_objective, add_message
-from app.rag import get_rag_context
+from app.rag import get_rag_context, get_rag_context_multi
 
 # Match end-of-sentence punctuation followed by whitespace
 _SENT_END = re.compile(r'(?<=[.!?])\s+')
@@ -29,11 +30,25 @@ OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434") + "/api/chat
 MODEL = "gemma4:e4b"
 
 def build_system_prompt(objective: str, verb: str, rag_context: str = "") -> str:
-    rag_section = f"""
+    if not verb or not objective:
+        logging.warning(
+            "build_system_prompt called with empty verb or objective — "
+            "using safe fallback instruction"
+        )
+        verb = "Review"
+        objective = "the material covered so far in this session"
 
-Relevant material from the student's curriculum:
+    if rag_context:
+        rag_section = f"""
+
+STUDENT'S CURRICULUM CONTEXT:
 {rag_context}
-""" if rag_context else ""
+
+The above is an excerpt from the student's uploaded study material. Use it to understand what this student is studying, what terminology their curriculum uses, and what level of detail is expected. Align your teaching and questions to this curriculum. You are not limited to only what is written above — use your full medical knowledge to explain concepts deeply and accurately. The curriculum context guides the direction, your knowledge delivers the depth."""
+    else:
+        rag_section = """
+
+No study material has been uploaded. Teach from general medical knowledge."""
 
     return f"""You are Dr. Mira — 28 years old, senior medical resident, 
 cocky, razor sharp, and actually brilliant at what you do. You have a razor tongue and zero patience for half-answers or lazy thinking.
@@ -77,7 +92,10 @@ async def stream_teaching_response(session_id: str, student_message: str) -> Asy
 
     add_message(session_id, "user", student_message)
 
-    rag_context = get_rag_context(f"{current.verb} {current.objective}")
+    rag_context = get_rag_context_multi(
+        queries=[f"{current.verb} {current.objective}", student_message],
+        n_results_per_query=5,
+    )
     messages = [
         {"role": "system", "content": build_system_prompt(current.objective, current.verb, rag_context)}
     ]

@@ -182,9 +182,9 @@ def query_rag(query: str, n_results: int = 3) -> list[str]:
     return results["documents"][0] if results["documents"] else []
 
 
-def get_rag_context(query: str) -> str:
+def get_rag_context(query: str, n_results: int = 3) -> str:
     """Return formatted curriculum context for a query, or '' if collection is empty."""
-    chunks = query_rag(query)
+    chunks = query_rag(query, n_results=n_results)
     if not chunks:
         return ""
     parts = ["---CURRICULUM CONTEXT---"]
@@ -192,3 +192,29 @@ def get_rag_context(query: str) -> str:
         parts.append(chunk)
         parts.append("---")
     return "\n".join(parts)
+
+
+def get_rag_context_multi(queries: list[str], n_results_per_query: int = 5) -> str:
+    """Run multiple queries, deduplicate by exact content match, return combined context string."""
+    seen = set()
+    deduped_chunks = []
+    for query in queries:
+        for chunk in query_rag(query, n_results=n_results_per_query):
+            if chunk not in seen:
+                seen.add(chunk)
+                deduped_chunks.append(chunk)
+    if not deduped_chunks:
+        return ""
+    parts = ["---CURRICULUM CONTEXT---"]
+    for chunk in deduped_chunks:
+        parts.append(chunk)
+        parts.append("---")
+    return "\n".join(parts)
+
+
+def is_rag_available() -> bool:
+    """Returns True if ChromaDB has any documents indexed."""
+    try:
+        return _get_collection().count() > 0
+    except Exception:
+        return False

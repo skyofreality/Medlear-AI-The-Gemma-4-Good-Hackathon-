@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { streamResponse, transcribeAudio, evaluateSession, fetchSpeechWithTiming } from "@/lib/api";
+import { sendMessageStream, transcribeAudio } from "@/lib/api";
 import TalkingHeadAvatar, { AvatarHandle } from "@/components/TalkingHeadAvatar";
 
 interface Objective {
@@ -26,6 +26,15 @@ export default function SessionPage() {
   const [currentObjective, setCurrentObjective] = useState<Objective | null>(null);
   const [objectives, setObjectives] = useState<Objective[]>([]);
   const [sessionComplete, setSessionComplete] = useState(false);
+  const [sessionSummary, setSessionSummary] = useState("");
+  const [pendingAdvancement, setPendingAdvancement] = useState<{
+    evaluation: any,
+    nextObjective: any,
+    sessionComplete: boolean,
+    sessionSummary: string,
+    transition: string,
+    transitionAudio: string
+  } | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const greetingFired = useRef(false);
@@ -34,6 +43,7 @@ export default function SessionPage() {
   const avatarRef = useRef<AvatarHandle>(null);
   const moodTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const audioQueueEndAtRef = useRef<number>(0);
 
   function setMoodTemporary(mood: string, durationMs = 6000) {
     if (moodTimerRef.current) clearTimeout(moodTimerRef.current);
@@ -56,6 +66,34 @@ export default function SessionPage() {
     inactivityTimerRef.current = setTimeout(() => {
       avatarRef.current?.setMood("angry");
     }, 90000);
+  }
+
+  function estimateWavDurationMs(b64: string): number {
+    try {
+      const binary = atob(b64);
+      const ch = binary.charCodeAt(22) | (binary.charCodeAt(23) << 8);
+      const sr = binary.charCodeAt(24) | (binary.charCodeAt(25) << 8) | (binary.charCodeAt(26) << 16) | (binary.charCodeAt(27) << 24);
+      const bps = binary.charCodeAt(34) | (binary.charCodeAt(35) << 8);
+      const size = binary.charCodeAt(40) | (binary.charCodeAt(41) << 8) | (binary.charCodeAt(42) << 16) | (binary.charCodeAt(43) << 24);
+      const bytesPerSec = sr * ch * (bps / 8);
+      if (!bytesPerSec) return 3000;
+      return (size / bytesPerSec) * 1000;
+    } catch { return 3000; }
+  }
+
+  function scheduleSpeak(b64: string, sentence: string) {
+    const dur = estimateWavDurationMs(b64);
+    const now = performance.now();
+    const startAt = Math.max(now, audioQueueEndAtRef.current);
+    audioQueueEndAtRef.current = startAt + dur;
+    avatarRef.current?.speak(b64, sentence);
+  }
+
+  async function waitForAudioQueueDrained(bufferMs = 150) {
+    const remaining = audioQueueEndAtRef.current - performance.now();
+    if (remaining > 0) {
+      await new Promise(r => setTimeout(r, remaining + bufferMs));
+    }
   }
 
   useEffect(() => {
@@ -82,13 +120,30 @@ export default function SessionPage() {
   async function runStream(sessionId: string, userMessage: string, isGreeting = false) {
     setLoading(true);
     avatarRef.current?.setMood("neutral");
+    audioQueueEndAtRef.current = performance.now();
     let fullText = "";
     let firstTextEvent = true;
+    let pendingLocal: {
+      evaluation: any,
+      nextObjective: any,
+      sessionComplete: boolean,
+      sessionSummary: string,
+      transition: string,
+      transitionAudio: string,
+      prevObjectiveId: number | undefined,
+    } | null = null;
 
     try {
-      for await (const event of streamResponse(sessionId, userMessage)) {
+      for await (const event of sendMessageStream(sessionId, userMessage)) {
         if (event.type === "text") {
-          fullText += (fullText ? " " : "") + event.content;
+          const sentence = (event as any).sentence as string;
+          if (pendingLocal) {
+            pendingLocal.transition = pendingLocal.transition
+              ? pendingLocal.transition + " " + sentence
+              : sentence;
+            continue;
+          }
+          fullText += (fullText ? " " : "") + sentence;
           if (firstTextEvent) {
             if (isGreeting) {
               setMessages([{ role: "assistant", content: fullText }]);
@@ -104,35 +159,64 @@ export default function SessionPage() {
               return updated;
             });
           }
-          // Detect mood from Dr. Mira's sentence
-          const sentenceMood = detectMoodFromText(event.content);
+          const sentenceMood = detectMoodFromText(sentence);
           if (sentenceMood) setMoodTemporary(sentenceMood, 5000);
         } else if (event.type === "audio") {
-          avatarRef.current?.speak(event.content, event.text);
-        } else if (event.type === "done") {
-          try {
-            const evalResult = await evaluateSession(sessionId);
-            if (evalResult.advanced) {
-              setObjectives(prev => prev.map((o: any) =>
-                o.id === currentObjective?.id
-                  ? { ...o, completed: true, comprehension_score: evalResult.score }
-                  : o
-              ));
-              setMoodTemporary("happy", 7000);
-            } else if (evalResult.score < 0.35) {
+          const audioEvent = event as any;
+          if (pendingLocal) {
+            pendingLocal.transitionAudio = audioEvent.wav;
+            continue;
+          }
+          scheduleSpeak(audioEvent.wav, audioEvent.sentence);
+        } else if (event.type === "eval") {
+          const ev = event as any;
+          const evalData = ev.evaluation || {};
+          if (evalData.advanced) {
+            pendingLocal = {
+              evaluation: evalData,
+              nextObjective: ev.current_objective,
+              sessionComplete: !!ev.session_complete,
+              sessionSummary: ev.session_summary || "",
+              transition: "",
+              transitionAudio: "",
+              prevObjectiveId: currentObjective?.id,
+            };
+            setPendingAdvancement(pendingLocal);
+            setLoading(true);
+          } else {
+            if (evalData.score < 0.35) {
               setMoodTemporary("angry", 6000);
-            } else if (evalResult.score < 0.55) {
+            } else if (evalData.score < 0.55) {
               setMoodTemporary("sad", 5000);
             }
-            if (evalResult.current_objective) setCurrentObjective(evalResult.current_objective);
-            if (evalResult.session_complete) setSessionComplete(true);
-            if (evalResult.transition_message) {
-              setMessages(prev => [...prev, { role: "assistant", content: evalResult.transition_message }]);
-              const tts = await fetchSpeechWithTiming(evalResult.transition_message);
-              if (tts) avatarRef.current?.speak(tts.audio_base64, evalResult.transition_message);
+            if (ev.current_objective) setCurrentObjective(ev.current_objective);
+            if (ev.session_complete) {
+              setSessionComplete(true);
+              setSessionSummary(ev.session_summary || "");
             }
-          } catch {
-            console.error("Evaluation failed");
+          }
+        } else if (event.type === "done") {
+          if (pendingLocal) {
+            const p = pendingLocal;
+            // Wait for Response A to finish speaking, then quietly update state.
+            // No transition bubble or speech — next student turn will naturally
+            // generate the response on the new objective.
+            await waitForAudioQueueDrained();
+            setObjectives(prev => prev.map((o: any) =>
+              o.id === p.prevObjectiveId
+                ? { ...o, completed: true, comprehension_score: p.evaluation.score }
+                : o
+            ));
+            setMoodTemporary("happy", 7000);
+            if (p.nextObjective) setCurrentObjective(p.nextObjective);
+            if (p.sessionComplete) {
+              setSessionComplete(true);
+              setSessionSummary(p.sessionSummary || "");
+            }
+            fullText = "";
+            firstTextEvent = true;
+            setPendingAdvancement(null);
+            pendingLocal = null;
           }
         }
       }
@@ -303,13 +387,45 @@ export default function SessionPage() {
             )}
 
             {sessionComplete && (
-              <div className="text-center py-6">
-                <div className="text-3xl mb-2">🎉</div>
-                <h2 className="text-base font-semibold text-gray-900 mb-1">Session complete!</h2>
-                <p className="text-xs text-gray-500 mb-3">You've worked through all objectives.</p>
+              <div className="w-full max-w-lg mx-auto rounded-2xl border border-gray-200 bg-white p-6">
+                {/* Header */}
+                <p className="text-sm uppercase tracking-wide text-gray-500 mb-1">Session complete</p>
+                <h2 className="text-xl font-semibold text-gray-900">{session.topic}</h2>
+
+                <div className="border-t border-gray-100 my-4" />
+
+                {/* Summary */}
+                <p className="text-sm font-medium text-gray-700 mb-2">How you did</p>
+                <p className="text-sm text-gray-600 leading-relaxed">
+                  {sessionSummary || "You worked through all objectives for this session."}
+                </p>
+
+                <div className="border-t border-gray-100 my-4" />
+
+                {/* Objectives review */}
+                <p className="text-sm font-medium text-gray-700 mb-2">Objectives</p>
+                <div className="space-y-1.5">
+                  {objectives.map((obj) => {
+                    const mastered = obj.completed && obj.comprehension_score >= 0.75;
+                    return (
+                      <div key={obj.id} className="flex items-center gap-2">
+                        <span className={`text-sm shrink-0 ${mastered ? "text-green-500" : "text-gray-300"}`}>
+                          {mastered ? "✓" : "○"}
+                        </span>
+                        <span className="text-sm text-gray-700 flex-1">{obj.verb} {obj.objective}</span>
+                        <span className="text-xs text-gray-400 shrink-0">
+                          {obj.completed ? `${Math.round(obj.comprehension_score * 100)}%` : "—"}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="border-t border-gray-100 my-4" />
+
                 <button
                   onClick={() => router.push("/")}
-                  className="bg-teal-600 text-white px-5 py-2 rounded-xl text-sm font-medium hover:bg-teal-700"
+                  className="w-full bg-violet-600 text-white py-2 rounded-xl text-sm font-medium hover:bg-violet-700 transition-colors"
                 >
                   Start a new session
                 </button>
