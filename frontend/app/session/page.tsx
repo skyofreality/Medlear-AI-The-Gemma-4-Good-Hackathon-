@@ -73,12 +73,12 @@ export default function SessionPage() {
     } catch { return 3000; }
   }
 
-  function scheduleSpeak(b64: string, sentence: string) {
+  function scheduleSpeak(b64: string, sentence: string, alignment?: { words: string[]; wtimes: number[]; wdurations: number[] }) {
     const dur = estimateWavDurationMs(b64);
     const now = performance.now();
     const startAt = Math.max(now, audioQueueEndAtRef.current);
     audioQueueEndAtRef.current = startAt + dur;
-    avatarRef.current?.speak(b64, sentence);
+    avatarRef.current?.speak(b64, sentence, alignment);
   }
 
   async function waitForAudioQueueDrained(bufferMs = 150) {
@@ -147,7 +147,7 @@ export default function SessionPage() {
           if (sentenceMood) setMoodTemporary(sentenceMood, 5000);
         } else if (event.type === "audio") {
           const audioEvent = event as any;
-          scheduleSpeak(audioEvent.wav, audioEvent.sentence);
+          scheduleSpeak(audioEvent.wav, audioEvent.sentence, audioEvent.alignment);
         } else if (event.type === "eval") {
           const ev = event as any;
           const evalData = ev.evaluation || {};
@@ -195,7 +195,8 @@ export default function SessionPage() {
           }
         }
       }
-    } catch {
+    } catch (e) {
+      console.error(e);
       setMessages(prev => [...prev, { role: "assistant", content: "Sorry, something went wrong. Please try again." }]);
     } finally {
       setLoading(false);

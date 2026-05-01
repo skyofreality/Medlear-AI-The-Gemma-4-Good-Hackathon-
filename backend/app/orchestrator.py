@@ -2,12 +2,9 @@ import asyncio
 import httpx
 import json
 import logging
-import os
 from typing import Optional
 from app.rag import get_rag_context, is_rag_available
-
-OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434") + "/api/chat"
-MODEL = "gemma4:e4b"
+from app.config import OLLAMA_CHAT_URL, MODEL
 
 OBJECTIVES_TOOL = {
     "type": "function",
@@ -83,10 +80,11 @@ async def generate_objectives(topic: str, assignment_text: Optional[str] = None)
             {"role": "user", "content": user_content}
         ],
         "tools": [OBJECTIVES_TOOL],
+        "options": {"num_ctx": 8192},
     }
 
     async with httpx.AsyncClient(timeout=300.0) as client:
-        response = await client.post(OLLAMA_URL, json=payload)
+        response = await client.post(OLLAMA_CHAT_URL, json=payload)
         response.raise_for_status()
         data = response.json()
         logging.warning(f"DEBUG raw response keys: {list(data.keys())}")

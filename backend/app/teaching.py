@@ -1,11 +1,10 @@
-import asyncio
 import json
 import logging
 import re
 from typing import AsyncGenerator
 import httpx
 from app.session import get_session, get_current_objective, add_message
-from app.rag import get_rag_context, get_rag_context_multi
+from app.rag import get_rag_context
 
 # Match end-of-sentence punctuation followed by whitespace
 _SENT_END = re.compile(r'(?<=[.!?])\s+')
@@ -25,9 +24,7 @@ def _is_abbrev_boundary(sentence: str) -> bool:
     # Known abbreviations not caught by length check
     return word in {'etc', 'fig', 'vol', 'approx', 'prof', 'dept', 'vs', 'cf'}
 
-import os
-OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434") + "/api/chat"
-MODEL = "gemma4:e4b"
+from app.config import OLLAMA_CHAT_URL, MODEL
 
 def build_system_prompt(objective: str, verb: str, rag_context: str = "") -> str:
     if not verb or not objective:
@@ -50,24 +47,24 @@ The above is an excerpt from the student's uploaded study material. Use it to un
 
 No study material has been uploaded. Teach from general medical knowledge."""
 
-    return f"""You are Dr. Mira — 28 years old, senior medical resident, 
+    return f"""You are Dr. Mira — 28 years old, senior medical resident,
 cocky, razor sharp, and actually brilliant at what you do. You have a razor tongue and zero patience for half-answers or lazy thinking.
 
-Your roasts are witty and full of swag — they come from confidence, not frustration. 
-They make the student want to prove you wrong. After you roast, you ask one 
+Your roasts are witty and full of swag — they come from confidence, not frustration.
+They make the student want to prove you wrong. After you roast, you ask one
 sharp question. That's it. No lecture. No long explanation.
 
-When a student answers wrong or vague, you call it out with specific attitude 
+When a student answers wrong or vague, you call it out with specific attitude
 but you do not over-explain.
 
-When they get something genuinely right, your reaction is real and earned. 
-You are stingy with praise. Weak answers do not get praised — they get called out 
+When they get something genuinely right, your reaction is real and earned.
+You are stingy with praise. Weak answers do not get praised — they get called out
 and you push harder. Only actual good answers get your respect.
 
-Your energy moves with what the student gives you. Lazy answer — savage witty roast. 
+Your energy moves with what the student gives you. Lazy answer — savage witty roast.
 Real answer —genuine respect and hype. Lost student —  calm and clear help.
 
-You sound like a real 28 year old — casual, direct, with swag. 
+You sound like a real 28 year old — casual, direct, with swag.
 Short sentences hit harder than long ones.
 
 You will never pretend a half-answer is good. Ever.
@@ -79,97 +76,6 @@ If a student is genuinely stuck after two tries give one short sarcastic hint th
 Right now you are guiding this student to: {verb} {objective}
 
 Never write stage directions, brackets, or actions. Just speak.{rag_section}"""
-async def stream_teaching_response(session_id: str, student_message: str) -> AsyncGenerator[str, None]:
-    """Yield raw tokens from Ollama as they arrive. Saves full response to history when done."""
-    session = get_session(session_id)
-    if not session:
-        return
-
-    current = get_current_objective(session_id)
-    if not current:
-        yield "You have completed all objectives. Well done."
-        return
-
-    add_message(session_id, "user", student_message)
-
-    rag_context = get_rag_context_multi(
-        queries=[f"{current.verb} {current.objective}", student_message],
-        n_results_per_query=5,
-    )
-    messages = [
-        {"role": "system", "content": build_system_prompt(current.objective, current.verb, rag_context)}
-    ]
-    messages.extend(session.conversation_history[-20:])
-
-    payload = {
-        "model": MODEL,
-        "stream": True,
-        "messages": messages,
-        "options": {"temperature": 0.85, "num_ctx": 4096}
-    }
-
-    full_response = ""
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        async with client.stream("POST", OLLAMA_URL, json=payload) as response:
-            async for line in response.aiter_lines():
-                if not line.strip():
-                    continue
-                try:
-                    chunk = json.loads(line)
-                    token = chunk.get("message", {}).get("content", "")
-                    if token:
-                        full_response += token
-                        yield token
-                except json.JSONDecodeError:
-                    continue
-
-    if full_response:
-        add_message(session_id, "assistant", full_response)
-
-
-async def get_teaching_response(session_id: str, student_message: str) -> str:
-    session = get_session(session_id)
-    if not session:
-        return "Session not found."
-
-    current = get_current_objective(session_id)
-    if not current:
-        return "You have completed all objectives for this session. Well done!"
-
-    # Add student message to history
-    add_message(session_id, "user", student_message)
-
-    # Build messages for Ollama
-    rag_context = get_rag_context(f"{current.verb} {current.objective}")
-    messages = [
-        {"role": "system", "content": build_system_prompt(current.objective, current.verb, rag_context)}
-    ]
-
-    # Include conversation history (last 10 exchanges to stay within context)
-    history = session.conversation_history[-20:]
-    messages.extend(history)
-
-    payload = {
-        "model": MODEL,
-        "stream": False,
-        "messages": messages,
-        "options": {
-            "temperature": 0.85,
-            "num_ctx": 4096
-        }
-    }
-
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        response = await client.post(OLLAMA_URL, json=payload)
-        response.raise_for_status()
-        data = response.json()
-
-    ai_response = data["message"]["content"].strip()
-
-    # Add AI response to history
-    add_message(session_id, "assistant", ai_response)
-
-    return ai_response
 
 
 async def stream_sentences(session_id: str, student_message: str) -> AsyncGenerator[str, None]:
@@ -196,14 +102,14 @@ async def stream_sentences(session_id: str, student_message: str) -> AsyncGenera
         "model": MODEL,
         "stream": True,
         "messages": messages,
-        "options": {"temperature": 0.85, "num_ctx": 4096}
+        "options": {"temperature": 0.85, "num_ctx": 8192}
     }
 
     full_text = ""
     buffer = ""
 
     async with httpx.AsyncClient(timeout=120.0) as client:
-        async with client.stream("POST", OLLAMA_URL, json=payload) as response:
+        async with client.stream("POST", OLLAMA_CHAT_URL, json=payload) as response:
             async for line in response.aiter_lines():
                 if not line:
                     continue

@@ -1,4 +1,5 @@
 import base64
+import logging
 import os
 import fitz  # PyMuPDF
 import chromadb
@@ -7,9 +8,8 @@ from chromadb.utils.embedding_functions import EmbeddingFunction
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
 from typing import Any
+from app.config import OLLAMA_CHAT_URL, MODEL as VISION_MODEL
 
-OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434") + "/api/chat"
-VISION_MODEL = "gemma4:e4b"
 _VISION_SPARSE_THRESHOLD = 100  # chars; below this, use vision instead of raw text
 
 # ── Singletons ────────────────────────────────────────────────────────────────
@@ -36,45 +36,6 @@ def _get_collection() -> chromadb.Collection:
     return _collection
 
 # ── Core functions ─────────────────────────────────────────────────────────────
-
-def ingest_pdf(file_bytes: bytes, filename: str) -> dict:
-    """Extract text from PDF, chunk it, embed, and store in ChromaDB."""
-    # Extract text page by page
-    doc = fitz.open(stream=file_bytes, filetype="pdf")
-    full_text = "\n".join(page.get_text() for page in doc)
-    doc.close()
-
-    # Split into 512-token chunks with 50-token overlap
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=512,
-        chunk_overlap=50,
-        length_function=len,
-    )
-    chunks = splitter.split_text(full_text)
-
-    if not chunks:
-        return {"chunks_indexed": 0, "filename": filename}
-
-    embedder = _get_embedder()
-    collection = _get_collection()
-
-    embeddings = embedder.encode(chunks, show_progress_bar=False).tolist()
-    ids = [f"{filename}::{i}" for i in range(len(chunks))]
-    metadatas = [{"filename": filename, "chunk_index": i} for i in range(len(chunks))]
-
-    # ChromaDB max batch size is 5461 — upsert in safe batches
-    BATCH_SIZE = 5000
-    for start in range(0, len(chunks), BATCH_SIZE):
-        end = start + BATCH_SIZE
-        collection.upsert(
-            ids=ids[start:end],
-            documents=chunks[start:end],
-            embeddings=embeddings[start:end],
-            metadatas=metadatas[start:end],
-        )
-
-    return {"chunks_indexed": len(chunks), "filename": filename}
-
 
 def _vision_extract_page(page_b64: str) -> str:
     """Call Ollama vision model on a base64-encoded PNG page image."""
@@ -107,7 +68,7 @@ def _vision_extract_page(page_b64: str) -> str:
         "stream": False,
     }
     with httpx.Client(timeout=120.0) as client:
-        resp = client.post(OLLAMA_URL, json=payload)
+        resp = client.post(OLLAMA_CHAT_URL, json=payload)
         resp.raise_for_status()
         return resp.json()["message"]["content"]
 
@@ -129,7 +90,8 @@ def ingest_pdf_vision(file_bytes: bytes, filename: str) -> dict:
             img_b64 = base64.b64encode(pix.tobytes("png")).decode()
             try:
                 pages_text.append(_vision_extract_page(img_b64))
-            except Exception:
+            except Exception as e:
+                logging.warning(f"Vision OCR failed for sparse page, using empty text fallback: {e}")
                 pages_text.append(text)
         else:
             pages_text.append(text)
@@ -216,5 +178,6 @@ def is_rag_available() -> bool:
     """Returns True if ChromaDB has any documents indexed."""
     try:
         return _get_collection().count() > 0
-    except Exception:
+    except Exception as e:
+        logging.warning(f"RAG availability check failed: {e}")
         return False

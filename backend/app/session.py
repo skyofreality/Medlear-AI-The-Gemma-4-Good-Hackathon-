@@ -1,13 +1,9 @@
-import asyncio
 import httpx
 import logging
-import os
 import uuid
 from typing import Optional
 from pydantic import BaseModel
-
-OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434") + "/api/chat"
-MODEL = "gemma4:e4b"
+from app.config import OLLAMA_CHAT_URL, MODEL
 
 class Objective(BaseModel):
     id: int = 0
@@ -130,18 +126,19 @@ async def generate_session_summary(session_id: str) -> str:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},
         ],
-        "options": {"temperature": 0.4},
+        "options": {"temperature": 0.4, "num_ctx": 8192},
     }
 
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(OLLAMA_URL, json=payload)
+            response = await client.post(OLLAMA_CHAT_URL, json=payload)
             response.raise_for_status()
             data = response.json()
         summary = data["message"]["content"].strip()
         logging.info(f"Session summary generated for session {session_id}")
         return summary
-    except Exception:
+    except Exception as e:
+        logging.error(f"Session summary generation failed: {e}")
         return f"You completed your session on {session.topic}. Review any objectives marked as needing more work before your next session."
 
 

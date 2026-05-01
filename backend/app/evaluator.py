@@ -2,12 +2,9 @@ import asyncio
 import httpx
 import json
 import logging
-import os
 from app.session import get_session, get_current_objective, advance_session
 from app.rag import get_rag_context
-
-OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434") + "/api/chat"
-MODEL = "gemma4:e4b"
+from app.config import OLLAMA_CHAT_URL, MODEL
 
 EVALUATION_TOOL = {
     "type": "function",
@@ -138,12 +135,12 @@ Evaluate whether the student has demonstrated genuine understanding of the objec
             "tools": [EVALUATION_TOOL],
             "options": {
                 "temperature": 0.1,
-                "num_ctx": 4096
+                "num_ctx": 8192
             }
         }
 
         async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(OLLAMA_URL, json=payload)
+            response = await client.post(OLLAMA_CHAT_URL, json=payload)
             response.raise_for_status()
             data = response.json()
 
@@ -188,8 +185,10 @@ Evaluate whether the student has demonstrated genuine understanding of the objec
         return result
 
     except json.JSONDecodeError as e:
+        logging.error(f"Evaluator JSON parse error: {e}")
         fallback["reason"] = f"Evaluator JSON parse error: {str(e)}"
         return fallback
     except Exception as e:
+        logging.error(f"Evaluator failed: {e}")
         fallback["reason"] = f"Evaluator error: {str(e)}"
         return fallback
