@@ -10,10 +10,39 @@ OBJECTIVES_TOOL = {
     "type": "function",
     "function": {
         "name": "submit_objectives",
-        "description": "Submit the generated learning objectives for this study session",
+        "description": "Submit the generated learning objectives and coverage analysis for this study session",
         "parameters": {
             "type": "object",
             "properties": {
+                "coverage_summary": {
+                    "type": "object",
+                    "description": "Analysis of topic coverage from the source material",
+                    "properties": {
+                        "topic_interpretation": {
+                            "type": "string",
+                            "description": "How the topic was interpreted based on the source material",
+                        },
+                        "detected_subtopics": {
+                            "type": "array",
+                            "description": "All subtopics found explicitly in the source material",
+                            "items": {"type": "string"},
+                        },
+                        "coverage_notes": {
+                            "type": "string",
+                            "description": "Notes on how well the source material covers the topic",
+                        },
+                        "possible_gaps": {
+                            "type": "array",
+                            "description": "Subtopics hinted at but not fully covered in the source material",
+                            "items": {"type": "string"},
+                        },
+                    },
+                    "required": ["topic_interpretation", "detected_subtopics", "coverage_notes", "possible_gaps"],
+                },
+                "confidence": {
+                    "type": "number",
+                    "description": "Score from 0.0 to 1.0 indicating how well the objectives are grounded in source material",
+                },
                 "objectives": {
                     "type": "array",
                     "description": "List of 4 to 8 learning objectives",
@@ -39,12 +68,21 @@ OBJECTIVES_TOOL = {
                         },
                         "required": ["id", "verb", "objective", "source_hint"],
                     },
-                }
+                },
             },
-            "required": ["objectives"],
+            "required": ["coverage_summary", "confidence", "objectives"],
         },
     },
 }
+
+
+def _empty_coverage_summary() -> dict:
+    return {
+        "topic_interpretation": "",
+        "detected_subtopics": [],
+        "coverage_notes": "",
+        "possible_gaps": [],
+    }
 
 def _parse_objective_tool_arguments(arguments) -> dict:
     if isinstance(arguments, str):
@@ -69,7 +107,11 @@ def _extract_objectives_from_tool_calls(message: dict) -> Optional[dict]:
             raise ValueError(
                 "submit_objectives tool call did not include an objectives list"
             )
-        return {"objectives": objectives}
+        return {
+            "objectives": objectives,
+            "coverage_summary": args.get("coverage_summary") or _empty_coverage_summary(),
+            "confidence": args.get("confidence") if args.get("confidence") is not None else 0.0,
+        }
     return None
 
 
@@ -92,7 +134,7 @@ def _parse_objectives_from_content(content: str) -> dict:
     return parsed
 
 
-async def _extract_objectives_from_thinking(thinking_text: str) -> Optional[list]:
+async def _extract_objectives_from_thinking(thinking_text: str) -> Optional[dict]:
     logging.warning(
         "Extracting objectives from thinking field, len=%s chars", len(thinking_text)
     )
@@ -104,8 +146,8 @@ async def _extract_objectives_from_thinking(thinking_text: str) -> Optional[list
                 "role": "system",
                 "content": (
                     "You are a structured data extractor. Convert the following "
-                    "reasoning into a JSON array of learning objectives. "
-                    "Output only valid JSON, no explanation, no markdown."
+                    "reasoning into structured learning objectives with coverage analysis. "
+                    "Output only via the submit_objectives tool call."
                 ),
             },
             {"role": "user", "content": thinking_text},
@@ -123,11 +165,17 @@ async def _extract_objectives_from_thinking(thinking_text: str) -> Optional[list
             return None
         tool_result = _extract_objectives_from_tool_calls(msg)
         if tool_result is not None:
-            return tool_result["objectives"]
+            return tool_result
         content = msg.get("content", "")
         if content:
             parsed = _parse_objectives_from_content(content)
-            return parsed.get("objectives")
+            objectives = parsed.get("objectives")
+            if isinstance(objectives, list):
+                return {
+                    "objectives": objectives,
+                    "coverage_summary": parsed.get("coverage_summary") or _empty_coverage_summary(),
+                    "confidence": parsed.get("confidence") if parsed.get("confidence") is not None else 0.0,
+                }
     except Exception as exc:
         logging.warning("Thinking extraction call failed: %s", exc)
     return None
@@ -135,13 +183,28 @@ async def _extract_objectives_from_thinking(thinking_text: str) -> Optional[list
 
 ORCHESTRATOR_SYSTEM_PROMPT = """You are a medical education curriculum designer creating learning objectives for medical students.
 
-Follow Bloom's taxonomy. Use only these action verbs: Identify, Explain, Differentiate, Apply, Analyze, Evaluate.
+STEP 1 — COVERAGE ANALYSIS (do this first):
+- Identify all subtopics explicitly present in the source material
+- Note any subtopics the source hints at but does not fully explain (possible_gaps)
+- Assess how well the source material covers the overall topic
+- Record this in the coverage_summary field of the tool call
 
-Generate 4 to 8 objectives that progress from lower order thinking (Identify, Explain) to higher order thinking (Analyze, Evaluate).
+STEP 2 — OBJECTIVE GENERATION:
+- Follow Bloom's taxonomy. Use only these action verbs: Identify, Explain, Differentiate, Apply, Analyze, Evaluate
+- Generate 4 to 8 objectives that progress from lower order thinking (Identify, Explain) to higher order thinking (Analyze, Evaluate)
+- Generate objectives that cover all detected_subtopics from the source material
+- Every objective must be traceable to something explicitly stated in the source text
+- Use the source_hint field to record the exact phrase from the source material each objective is based on
 
-CRITICAL: If source material is provided below, generate objectives ONLY from that material. Do not use outside knowledge. Every objective must be traceable to something explicitly stated in the source text. Use the source_hint field to record the exact phrase from the source material that each objective comes from.
+STEP 3 — CONFIDENCE SCORE:
+- Set confidence between 0.0 and 1.0 based on how well the source grounds the objectives
+- Above 0.8: objectives fully covered by source material
+- 0.5 to 0.8: some objectives rely on general knowledge
+- Below 0.5: source material is sparse or off-topic
 
-If no source material is provided, generate objectives from general medical knowledge about the topic."""
+CRITICAL: If source material is provided, generate objectives ONLY from that material. Do not use outside knowledge.
+
+If no source material is provided, generate objectives from general medical knowledge, set confidence to 0.5, and leave detected_subtopics empty."""
 
 
 async def generate_objectives(
@@ -231,23 +294,40 @@ async def generate_objectives(
 
     tool_result = _extract_objectives_from_tool_calls(msg)
     if tool_result is not None:
-        logging.info(
-            "Orchestrator extracted objectives from submit_objectives tool call count=%s",
+        logging.warning(
+            "Objectives from tool call count=%s confidence=%s subtopics=%s gaps=%s",
             len(tool_result["objectives"]),
+            tool_result["confidence"],
+            tool_result["coverage_summary"].get("detected_subtopics"),
+            tool_result["coverage_summary"].get("possible_gaps"),
         )
-        return {"topic": topic, "objectives": tool_result["objectives"]}
+        return {
+            "topic": topic,
+            "coverage_summary": tool_result["coverage_summary"],
+            "confidence": tool_result["confidence"],
+            "objectives": tool_result["objectives"],
+        }
 
     logging.warning("Orchestrator: submit_objectives tool call missing, trying thinking then content")
 
     thinking = msg.get("thinking", "")
     if thinking:
         logging.warning("Gemma thinking mode detected, len=%s chars", len(thinking))
-        objectives = await _extract_objectives_from_thinking(thinking)
-        if objectives is not None:
+        result = await _extract_objectives_from_thinking(thinking)
+        if result is not None:
             logging.warning(
-                "Objectives extracted from thinking successfully count=%s", len(objectives)
+                "Objectives from thinking count=%s confidence=%s subtopics=%s gaps=%s",
+                len(result["objectives"]),
+                result["confidence"],
+                result["coverage_summary"].get("detected_subtopics"),
+                result["coverage_summary"].get("possible_gaps"),
             )
-            return {"topic": topic, "objectives": objectives}
+            return {
+                "topic": topic,
+                "coverage_summary": result["coverage_summary"],
+                "confidence": result["confidence"],
+                "objectives": result["objectives"],
+            }
         logging.warning("Thinking extraction failed, falling back to content")
 
     content_result = _parse_objectives_from_content(msg.get("content", ""))
@@ -256,4 +336,6 @@ async def generate_objectives(
         len(content_result["objectives"]),
     )
     content_result.setdefault("topic", topic)
+    content_result.setdefault("coverage_summary", _empty_coverage_summary())
+    content_result.setdefault("confidence", 0.0)
     return content_result

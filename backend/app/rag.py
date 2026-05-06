@@ -426,10 +426,13 @@ def retrieve_topic_spans(
             candidate_span_ids,
             rejected_spans,
         )
-        fallback_spans = candidate_spans[:3]
-        fallback_ids = [span.span_id for span in fallback_spans]
+        top_page = candidate_spans[0].page_number if candidate_spans else None
+        page_spans = [s for s in candidate_spans if s.page_number == top_page][:max_spans]
+        fallback_ids = [span.span_id for span in page_spans]
         logging.warning(
-            "Falling back to top RAG candidates for topic span selection fallback_span_ids=%s",
+            "Fallback page-aware selection: top_page=%s spans_on_page=%s fallback_span_ids=%s",
+            top_page,
+            len(page_spans),
             fallback_ids,
         )
         accepted_ids = fallback_ids
