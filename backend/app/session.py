@@ -24,6 +24,7 @@ class Session(BaseModel):
     current_index: int = 0
     conversation_history: list[dict] = []
     completed: bool = False
+    pending_feedback: Optional[dict] = None
 
 # In-memory store — will move to SQLite in Phase 4
 sessions: dict[str, Session] = {}
@@ -81,6 +82,21 @@ def add_message(session_id: str, role: str, content: str):
             "role": role,
             "content": content
         })
+
+def set_pending_feedback(session_id: str, feedback: dict) -> None:
+    session = get_session(session_id)
+    if session:
+        session.pending_feedback = feedback
+
+
+def get_and_clear_pending_feedback(session_id: str) -> Optional[dict]:
+    session = get_session(session_id)
+    if not session or not session.pending_feedback:
+        return None
+    feedback = session.pending_feedback
+    session.pending_feedback = None
+    return feedback
+
 
 def advance_session(session_id: str, comprehension_score: float) -> bool:
     """Mark current objective complete and move to next. Returns True if session is now fully complete."""

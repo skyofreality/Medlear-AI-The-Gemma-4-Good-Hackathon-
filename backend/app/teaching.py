@@ -3,7 +3,7 @@ import logging
 import re
 from typing import AsyncGenerator
 import httpx
-from app.session import get_session, get_current_objective, add_message
+from app.session import get_session, get_current_objective, add_message, get_and_clear_pending_feedback
 from app.rag import get_rag_context
 
 # Match end-of-sentence punctuation followed by whitespace
@@ -26,7 +26,7 @@ def _is_abbrev_boundary(sentence: str) -> bool:
 
 from app.config import OLLAMA_CHAT_URL, MODEL
 
-def build_system_prompt(objective: str, verb: str, rag_context: str = "") -> str:
+def build_system_prompt(objective: str, verb: str, rag_context: str = "", pending_feedback: dict = None) -> str:
     if not verb or not objective:
         logging.warning(
             "build_system_prompt called with empty verb or objective — "
@@ -34,6 +34,21 @@ def build_system_prompt(objective: str, verb: str, rag_context: str = "") -> str
         )
         verb = "Review"
         objective = "the material covered so far in this session"
+
+    if pending_feedback:
+        focus = pending_feedback.get("feedback_focus", "")
+        missing = pending_feedback.get("missing_elements", [])
+        misconceptions = pending_feedback.get("misconceptions", [])
+        feedback_section = (
+            "\n\nPREVIOUS ANSWER GAPS TO ADDRESS:\n"
+            f"Focus on: {focus}\n"
+            f"Missing elements: {', '.join(missing) if missing else 'none'}\n"
+            f"Misconceptions to correct: {', '.join(misconceptions) if misconceptions else 'none'}\n\n"
+            "Ask your next question targeting these gaps specifically. "
+            "Do not move to a new concept until these are addressed."
+        )
+    else:
+        feedback_section = ""
 
     if rag_context:
         rag_section = f"""
@@ -75,7 +90,7 @@ If a student is genuinely stuck after two tries give one short sarcastic hint th
 
 Right now you are guiding this student to: {verb} {objective}
 
-Never write stage directions, brackets, or actions. Just speak.{rag_section}"""
+Never write stage directions, brackets, or actions. Just speak.{rag_section}{feedback_section}"""
 
 
 async def stream_sentences(session_id: str, student_message: str) -> AsyncGenerator[str, None]:
@@ -91,6 +106,14 @@ async def stream_sentences(session_id: str, student_message: str) -> AsyncGenera
         return
 
     add_message(session_id, "user", student_message)
+
+    pending_feedback = get_and_clear_pending_feedback(session_id)
+    if pending_feedback:
+        logging.warning(
+            "Tutor injecting pending_feedback session_id=%s focus=%r",
+            session_id,
+            pending_feedback.get("feedback_focus"),
+        )
 
     logging.info(
         "Tutor RAG request session_id=%s retrieval_mode=%s doc_id=%s",
@@ -111,7 +134,7 @@ async def stream_sentences(session_id: str, student_message: str) -> AsyncGenera
         session.doc_id or "",
     )
     messages = [
-        {"role": "system", "content": build_system_prompt(current.objective, current.verb, rag_context)}
+        {"role": "system", "content": build_system_prompt(current.objective, current.verb, rag_context, pending_feedback)}
     ]
     messages.extend(session.conversation_history[-20:])
 
