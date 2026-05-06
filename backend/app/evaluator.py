@@ -184,8 +184,16 @@ async def evaluate_comprehension(session_id: str) -> dict:
             for msg in history
         ])
 
+        gaps_note = ""
+        if session.coverage_gaps:
+            gaps_note = (
+                "\nKnown source material gaps (do not penalise student for incomplete answers on these topics): "
+                f"{', '.join(session.coverage_gaps)}\n"
+            )
+
         user_content = (
-            f"Current objective: {current.verb} {current.objective}\n\n"
+            f"Current objective: {current.verb} {current.objective}\n"
+            f"{gaps_note}\n"
             f"Conversation transcript:\n{transcript}\n\n"
             "Evaluate whether the student has demonstrated genuine understanding of the objective above."
         )

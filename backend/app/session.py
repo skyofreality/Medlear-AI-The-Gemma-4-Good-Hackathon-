@@ -25,6 +25,7 @@ class Session(BaseModel):
     conversation_history: list[dict] = []
     completed: bool = False
     pending_feedback: Optional[dict] = None
+    coverage_gaps: list[str] = []
 
 # In-memory store — will move to SQLite in Phase 4
 sessions: dict[str, Session] = {}
@@ -63,6 +64,7 @@ def create_session(
         doc_id=doc_id,
         retrieval_mode=retrieval_mode,
     )
+    session.coverage_gaps = objectives_data.get("coverage_summary", {}).get("possible_gaps", [])
     sessions[session_id] = session
     return session
 
@@ -122,6 +124,7 @@ def advance_session(session_id: str, comprehension_score: float) -> bool:
     session.objectives[session.current_index].completed = True
     session.objectives[session.current_index].comprehension_score = comprehension_score
     session.current_index += 1
+    session.pending_feedback = None
 
     if session.current_index >= len(session.objectives):
         session.completed = True
