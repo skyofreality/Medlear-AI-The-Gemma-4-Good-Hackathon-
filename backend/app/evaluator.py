@@ -92,8 +92,25 @@ async def evaluate_comprehension(session_id: str) -> dict:
             return {**fallback, "score": 1.0, "satisfied": True,
                     "reason": "All objectives complete.", "session_complete": True}
 
+        logging.info(
+            "Evaluator RAG request session_id=%s retrieval_mode=%s doc_id=%s",
+            session_id,
+            session.retrieval_mode,
+            session.doc_id or "",
+        )
         eval_rag = await asyncio.to_thread(
-            get_rag_context, f"{current.verb} {current.objective}", 5
+            get_rag_context,
+            f"{current.verb} {current.objective}",
+            5,
+            session.doc_id,
+            session.retrieval_mode,
+        )
+        logging.info(
+            "Evaluator RAG used=%s session_id=%s retrieval_mode=%s doc_id=%s",
+            bool(eval_rag),
+            session_id,
+            session.retrieval_mode,
+            session.doc_id or "",
         )
 
         if eval_rag:

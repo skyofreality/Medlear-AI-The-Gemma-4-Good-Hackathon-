@@ -1,9 +1,11 @@
 import httpx
 import logging
 import uuid
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import BaseModel
 from app.config import OLLAMA_CHAT_URL, MODEL
+
+RetrievalMode = Literal["uploaded_pdf", "knowledge_base", "general_medical"]
 
 class Objective(BaseModel):
     id: int = 0
@@ -11,11 +13,14 @@ class Objective(BaseModel):
     objective: str
     completed: bool = False
     comprehension_score: float = 0.0
+    source_hint: str = ""
 
 class Session(BaseModel):
     session_id: str
     topic: str
     objectives: list[Objective]
+    doc_id: Optional[str] = None
+    retrieval_mode: RetrievalMode = "knowledge_base"
     current_index: int = 0
     conversation_history: list[dict] = []
     completed: bool = False
@@ -23,18 +28,39 @@ class Session(BaseModel):
 # In-memory store — will move to SQLite in Phase 4
 sessions: dict[str, Session] = {}
 
-def create_session(topic: str, objectives_data: dict) -> Session:
+def validate_retrieval_config(
+    retrieval_mode: str,
+    doc_id: Optional[str] = None,
+) -> None:
+    if retrieval_mode not in ("uploaded_pdf", "knowledge_base", "general_medical"):
+        raise ValueError(f"Unsupported retrieval_mode: {retrieval_mode}")
+    if retrieval_mode == "uploaded_pdf" and not doc_id:
+        raise ValueError("uploaded_pdf retrieval mode requires doc_id")
+
+
+def create_session(
+    topic: str,
+    objectives_data: dict,
+    doc_id: Optional[str] = None,
+    retrieval_mode: RetrievalMode = "knowledge_base",
+) -> Session:
+    validate_retrieval_config(retrieval_mode, doc_id)
+    logging.info(
+        "Creating session retrieval_mode=%s doc_id=%s",
+        retrieval_mode,
+        doc_id or "",
+    )
     session_id = str(uuid.uuid4())
     objectives = [
-        Objective(**obj) for obj in objectives_data["objectives"]
+        Objective(**{**obj, "id": i + 1})
+        for i, obj in enumerate(objectives_data["objectives"])
     ]
-    # Always assign sequential ids — don't trust tool output
-    for i, obj in enumerate(objectives):
-        obj.id = i + 1
     session = Session(
         session_id=session_id,
         topic=topic,
-        objectives=objectives
+        objectives=objectives,
+        doc_id=doc_id,
+        retrieval_mode=retrieval_mode,
     )
     sessions[session_id] = session
     return session

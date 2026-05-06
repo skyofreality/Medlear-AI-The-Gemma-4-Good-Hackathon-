@@ -1,12 +1,40 @@
 const API_BASE = "";
 
-export async function startSession(topic: string, assignmentText?: string) {
+export type RetrievalMode = "uploaded_pdf" | "knowledge_base" | "general_medical";
+
+export async function startSession(
+  topic: string,
+  retrievalMode: RetrievalMode,
+  docId?: string,
+  assignmentText?: string
+) {
   const res = await fetch(`${API_BASE}/api/session/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ topic, assignment_text: assignmentText }),
+    body: JSON.stringify({
+      topic,
+      retrieval_mode: retrievalMode,
+      doc_id: docId,
+      assignment_text: assignmentText,
+    }),
   });
-  if (!res.ok) throw new Error("Failed to start session");
+  if (!res.ok) {
+    let message = "Failed to start session";
+    const text = await res.text().catch(() => "");
+    if (text) {
+      try {
+        const data = JSON.parse(text);
+        if (data?.detail) {
+          message = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
+        } else {
+          message = text;
+        }
+      } catch {
+        message = text;
+      }
+    }
+    throw new Error(message);
+  }
   return res.json();
 }
 
@@ -60,7 +88,7 @@ export async function* sendMessageStream(
   }
 }
 
-export async function ingestPDF(file: File): Promise<{ message: string; chunks_indexed: number; filename: string }> {
+export async function ingestPDF(file: File): Promise<{ message: string; chunks_indexed: number; filename: string; doc_id: string }> {
   const form = new FormData();
   form.append("file", file, file.name);
   const res = await fetch(`${API_BASE}/api/rag/ingest`, { method: "POST", body: form });

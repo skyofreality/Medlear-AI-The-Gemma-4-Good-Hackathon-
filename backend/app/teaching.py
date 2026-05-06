@@ -92,7 +92,24 @@ async def stream_sentences(session_id: str, student_message: str) -> AsyncGenera
 
     add_message(session_id, "user", student_message)
 
-    rag_context = get_rag_context(f"{current.verb} {current.objective}")
+    logging.info(
+        "Tutor RAG request session_id=%s retrieval_mode=%s doc_id=%s",
+        session_id,
+        session.retrieval_mode,
+        session.doc_id or "",
+    )
+    rag_context = get_rag_context(
+        f"{current.verb} {current.objective}",
+        doc_id=session.doc_id,
+        retrieval_mode=session.retrieval_mode,
+    )
+    logging.info(
+        "Tutor RAG used=%s session_id=%s retrieval_mode=%s doc_id=%s",
+        bool(rag_context),
+        session_id,
+        session.retrieval_mode,
+        session.doc_id or "",
+    )
     messages = [
         {"role": "system", "content": build_system_prompt(current.objective, current.verb, rag_context)}
     ]
