@@ -313,7 +313,7 @@ Select the spans directly relevant to the topic."""
             {"role": "user", "content": user_prompt},
         ],
         "tools": [TOPIC_SPAN_SELECTION_TOOL],
-        "options": {"temperature": 0.1, "num_ctx": 8192},
+        "options": {"temperature": 0.1, "num_ctx": 8192, "think": False},
     }
 
     with httpx.Client(timeout=120.0) as client:

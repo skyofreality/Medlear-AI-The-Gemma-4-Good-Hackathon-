@@ -61,6 +61,8 @@ async def start_session(req: TopicRequest):
             req.doc_id or "",
             req.retrieval_mode,
         )
+        if not req.topic.strip():
+            raise HTTPException(status_code=400, detail="Topic cannot be empty")
         validate_retrieval_config(req.retrieval_mode, req.doc_id)
         objectives_data = await generate_objectives(
             req.topic,
@@ -147,6 +149,8 @@ async def stt(audio: UploadFile = File(...)):
 
 @app.post("/api/chat/stream")
 async def chat_stream(req: ChatRequest):
+    if not req.message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
     session = get_session(req.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")

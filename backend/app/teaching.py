@@ -142,7 +142,7 @@ async def stream_sentences(session_id: str, student_message: str) -> AsyncGenera
         "model": MODEL,
         "stream": True,
         "messages": messages,
-        "options": {"temperature": 0.85, "num_ctx": 8192}
+        "options": {"temperature": 0.85, "num_ctx": 8192, "think": False}
     }
 
     full_text = ""
