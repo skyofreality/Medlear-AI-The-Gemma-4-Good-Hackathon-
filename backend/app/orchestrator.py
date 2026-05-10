@@ -55,7 +55,7 @@ OBJECTIVES_TOOL = {
                             },
                             "verb": {
                                 "type": "string",
-                                "description": "Blooms taxonomy action verb: Identify, Explain, Differentiate, Apply, Analyze, or Evaluate",
+                                "description": "Blooms taxonomy action verb: Identify, Explain, Differentiate, Apply, or Analyze",
                             },
                             "objective": {
                                 "type": "string",
@@ -190,11 +190,12 @@ STEP 1 — COVERAGE ANALYSIS (do this first):
 - Record this in the coverage_summary field of the tool call
 
 STEP 2 — OBJECTIVE GENERATION:
-- Follow Bloom's taxonomy. Use only these action verbs: Identify, Explain, Differentiate, Apply, Analyze, Evaluate
-- Generate 4 to 8 objectives that progress from lower order thinking (Identify, Explain) to higher order thinking (Analyze, Evaluate)
+- Follow Bloom's taxonomy. Use only these action verbs: Identify, Explain, Differentiate, Apply, Analyze
+- Generate 4 to 8 objectives that progress from lower order thinking (Identify, Explain) to higher order thinking (Analyze)
 - Generate objectives that cover all detected_subtopics from the source material
 - Every objective must be traceable to something explicitly stated in the source text
 - Use the source_hint field to record the exact phrase from the source material each objective is based on
+Your objectives should collectively cover all major subtopics present in the source material.
 
 STEP 3 — CONFIDENCE SCORE:
 - Set confidence between 0.0 and 1.0 based on how well the source grounds the objectives
@@ -269,7 +270,7 @@ async def generate_objectives(
             {"role": "user", "content": user_content},
         ],
         "tools": [OBJECTIVES_TOOL],
-        "options": {"num_ctx": 8192, "think": False},
+        "options": {"temperature": 0.3, "num_ctx": 8192, "think": False},
     }
 
     async with httpx.AsyncClient(timeout=300.0) as client:

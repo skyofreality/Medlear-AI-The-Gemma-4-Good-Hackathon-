@@ -95,13 +95,14 @@ DIMENSIONS (score each 0.0 to 1.0):
 - topic_alignment: Does the answer stay on the current topic?
 - objective_alignment: Does the answer fully address the specific learning objective?
 - year_level: Is the depth appropriate for a medical student?
-- answer_correctness: Is the answer factually correct and well-reasoned?
+- answer_correctness: Is the answer factually correct and well-reasoned? A correct concept expressed in synonymous or less common but clinically valid terminology is still correct. Assess whether the reasoning is sound, not whether the student used the exact expected words.
 
 ADVANCE RULES:
 - Set advance=true ONLY when objective_alignment.score >= 0.7 AND answer_correctness.score >= 0.7
 - Student who only said hello or has not answered yet: all scores 0.0, advance=false
 - Student who parroted a definition without reasoning: objective_alignment.score <= 0.4
 - Student who answers in own words with correct reasoning: answer_correctness.score >= 0.75
+- The user_content includes how many attempts the student has made on this objective. Factor this into your assessment — a student with many attempts who is still not advancing tells a different story than one on their first try.
 
 FEEDBACK FOCUS:
 - Set feedback_focus to the single most important missing element or misconception
@@ -150,6 +151,9 @@ async def evaluate_comprehension(session_id: str) -> dict:
                     "advance": True, "session_complete": True,
                     "feedback_focus": "All objectives complete."}
 
+        if current.attempt_count < 3:
+            return fallback
+
         logging.info(
             "Evaluator RAG request session_id=%s retrieval_mode=%s doc_id=%s",
             session_id,
@@ -175,7 +179,7 @@ async def evaluate_comprehension(session_id: str) -> dict:
 
         system_content = rag_prefix + EVALUATOR_SYSTEM_PROMPT
 
-        history = session.conversation_history[-10:]
+        history = session.conversation_history[current.history_start_index:]
         if not history:
             return fallback
 
@@ -193,6 +197,7 @@ async def evaluate_comprehension(session_id: str) -> dict:
 
         user_content = (
             f"Current objective: {current.verb} {current.objective}\n"
+            f"Student attempts on this objective: {current.attempt_count}\n"
             f"{gaps_note}\n"
             f"Conversation transcript:\n{transcript}\n\n"
             "Evaluate whether the student has demonstrated genuine understanding of the objective above."
@@ -269,21 +274,6 @@ async def evaluate_comprehension(session_id: str) -> dict:
             "score": composite_score,
             "satisfied": bool(args.get("advance", False)),
         }
-
-        # Require minimum 3 student messages before any advancement
-        student_messages = [m for m in session.conversation_history if m["role"] == "user"]
-        if len(student_messages) < 3:
-            result["advance"] = False
-            result["satisfied"] = False
-            result["advanced"] = False
-            result["session_complete"] = False
-            # Still write pending_feedback so tutor knows what to target
-            set_pending_feedback(session_id, {
-                "feedback_focus": result["feedback_focus"],
-                "missing_elements": missing_elements,
-                "misconceptions": misconceptions,
-            })
-            return result
 
         # Write pending_feedback before advancing so tutor gets it on next turn
         set_pending_feedback(session_id, {

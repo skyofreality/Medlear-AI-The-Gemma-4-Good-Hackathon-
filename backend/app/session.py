@@ -14,6 +14,8 @@ class Objective(BaseModel):
     completed: bool = False
     comprehension_score: float = 0.0
     source_hint: str = ""
+    attempt_count: int = 0
+    history_start_index: int = 0
 
 class Session(BaseModel):
     session_id: str
@@ -84,6 +86,8 @@ def add_message(session_id: str, role: str, content: str):
             "role": role,
             "content": content
         })
+        if role == "user" and not session.completed:
+            session.objectives[session.current_index].attempt_count += 1
 
 def set_pending_feedback(session_id: str, feedback: dict) -> None:
     session = get_session(session_id)
@@ -129,6 +133,8 @@ def advance_session(session_id: str, comprehension_score: float) -> bool:
     if session.current_index >= len(session.objectives):
         session.completed = True
         return True
+
+    session.objectives[session.current_index].history_start_index = len(session.conversation_history)
     return False
 
 async def generate_session_summary(session_id: str) -> str:
