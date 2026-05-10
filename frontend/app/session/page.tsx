@@ -36,6 +36,7 @@ export default function SessionPage() {
   const moodTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const audioQueueEndAtRef = useRef<number>(0);
+  const streamGenerationRef = useRef<number>(0);
 
   function setMoodTemporary(mood: string, durationMs = 6000) {
     if (moodTimerRef.current) clearTimeout(moodTimerRef.current);
@@ -110,7 +111,9 @@ export default function SessionPage() {
   }, [messages]);
 
   async function runStream(sessionId: string, userMessage: string, isGreeting = false) {
+    const myGeneration = ++streamGenerationRef.current;
     setLoading(true);
+    avatarRef.current?.interrupt();
     avatarRef.current?.setMood("neutral");
     audioQueueEndAtRef.current = performance.now();
     let fullText = "";
@@ -147,7 +150,9 @@ export default function SessionPage() {
           if (sentenceMood) setMoodTemporary(sentenceMood, 5000);
         } else if (event.type === "audio") {
           const audioEvent = event as any;
-          scheduleSpeak(audioEvent.wav, audioEvent.sentence, audioEvent.alignment);
+          if (streamGenerationRef.current === myGeneration) {
+            scheduleSpeak(audioEvent.wav, audioEvent.sentence, audioEvent.alignment);
+          }
         } else if (event.type === "eval") {
           const ev = event as any;
           const evalData = ev.evaluation || {};

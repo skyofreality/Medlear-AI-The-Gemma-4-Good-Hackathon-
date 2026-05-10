@@ -10,6 +10,7 @@ export interface WordAlignment {
 export interface AvatarHandle {
   speak: (audioBase64: string, sentence: string, alignment?: WordAlignment) => Promise<void>;
   stop: () => void;
+  interrupt: () => void;
   setMood: (mood: string) => void;
 }
 
@@ -98,6 +99,11 @@ const TalkingHeadAvatar = forwardRef<AvatarHandle, Props>((props, ref) => {
       if (headRef.current) {
         headRef.current.stop();
         props.onComplete?.();
+      }
+    },
+    interrupt: () => {
+      if (headRef.current) {
+        headRef.current.stopSpeaking();
       }
     },
     setMood: (mood: string) => {
