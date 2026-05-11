@@ -205,7 +205,9 @@ STEP 3 — CONFIDENCE SCORE:
 
 CRITICAL: If source material is provided, generate objectives ONLY from that material. Do not use outside knowledge.
 
-If no source material is provided, generate objectives from general medical knowledge, set confidence to 0.5, and leave detected_subtopics empty."""
+If no source material is provided, generate objectives from general medical knowledge, set confidence to 0.5, and leave detected_subtopics empty.
+
+Return your response as JSON matching the provided schema."""
 
 
 async def generate_objectives(
@@ -269,7 +271,36 @@ async def generate_objectives(
             {"role": "system", "content": ORCHESTRATOR_SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
         ],
-        "tools": [OBJECTIVES_TOOL],
+        "format": {
+            "type": "object",
+            "properties": {
+                "objectives": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "integer"},
+                            "verb": {"type": "string"},
+                            "objective": {"type": "string"},
+                            "source_hint": {"type": "string"},
+                        },
+                        "required": ["id", "verb", "objective", "source_hint"],
+                    },
+                },
+                "coverage_summary": {
+                    "type": "object",
+                    "properties": {
+                        "topic_interpretation": {"type": "string"},
+                        "detected_subtopics": {"type": "array", "items": {"type": "string"}},
+                        "coverage_notes": {"type": "string"},
+                        "possible_gaps": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["topic_interpretation", "detected_subtopics", "coverage_notes", "possible_gaps"],
+                },
+                "confidence": {"type": "number"},
+            },
+            "required": ["objectives", "coverage_summary", "confidence"],
+        },
         "options": {"temperature": 0.3, "num_ctx": 8192, "think": False},
     }
 
@@ -293,50 +324,26 @@ async def generate_objectives(
     if not isinstance(msg, dict):
         raise ValueError("Objective generation response message was missing or invalid")
 
-    tool_result = _extract_objectives_from_tool_calls(msg)
-    if tool_result is not None:
-        logging.warning(
-            "Objectives from tool call count=%s confidence=%s subtopics=%s gaps=%s",
-            len(tool_result["objectives"]),
-            tool_result["confidence"],
-            tool_result["coverage_summary"].get("detected_subtopics"),
-            tool_result["coverage_summary"].get("possible_gaps"),
-        )
-        return {
-            "topic": topic,
-            "coverage_summary": tool_result["coverage_summary"],
-            "confidence": tool_result["confidence"],
-            "objectives": tool_result["objectives"],
-        }
+    try:
+        result = json.loads(msg["content"])
+    except Exception as exc:
+        raise ValueError(
+            f"Objective generation returned unparseable content: {exc}"
+        ) from exc
 
-    logging.warning("Orchestrator: submit_objectives tool call missing, trying thinking then content")
+    if not isinstance(result.get("objectives"), list):
+        raise ValueError("Objective generation JSON did not include an objectives list")
 
-    thinking = msg.get("thinking", "")
-    if thinking:
-        logging.warning("Gemma thinking mode detected, len=%s chars", len(thinking))
-        result = await _extract_objectives_from_thinking(thinking)
-        if result is not None:
-            logging.warning(
-                "Objectives from thinking count=%s confidence=%s subtopics=%s gaps=%s",
-                len(result["objectives"]),
-                result["confidence"],
-                result["coverage_summary"].get("detected_subtopics"),
-                result["coverage_summary"].get("possible_gaps"),
-            )
-            return {
-                "topic": topic,
-                "coverage_summary": result["coverage_summary"],
-                "confidence": result["confidence"],
-                "objectives": result["objectives"],
-            }
-        logging.warning("Thinking extraction failed, falling back to content")
-
-    content_result = _parse_objectives_from_content(msg.get("content", ""))
-    logging.warning(
-        "Orchestrator extracted objectives from content field count=%s",
-        len(content_result["objectives"]),
+    logging.info(
+        "Objectives parsed count=%s confidence=%s subtopics=%s gaps=%s",
+        len(result["objectives"]),
+        result.get("confidence"),
+        result.get("coverage_summary", {}).get("detected_subtopics"),
+        result.get("coverage_summary", {}).get("possible_gaps"),
     )
-    content_result.setdefault("topic", topic)
-    content_result.setdefault("coverage_summary", _empty_coverage_summary())
-    content_result.setdefault("confidence", 0.0)
-    return content_result
+    return {
+        "topic": topic,
+        "coverage_summary": result.get("coverage_summary") or _empty_coverage_summary(),
+        "confidence": result.get("confidence") if result.get("confidence") is not None else 0.0,
+        "objectives": result["objectives"],
+    }

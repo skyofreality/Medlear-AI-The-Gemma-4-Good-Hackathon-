@@ -312,7 +312,30 @@ Select the spans directly relevant to the topic."""
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        "tools": [TOPIC_SPAN_SELECTION_TOOL],
+        "format": {
+            "type": "object",
+            "properties": {
+                "accepted_span_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+                "rejected_spans": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "span_id": {"type": "string"},
+                            "reason": {"type": "string"},
+                        },
+                        "required": ["span_id", "reason"],
+                    },
+                },
+                "topic_interpretation": {"type": "string"},
+                "coverage_notes": {"type": "string"},
+                "confidence": {"type": "number"},
+            },
+            "required": ["accepted_span_ids", "rejected_spans", "topic_interpretation", "coverage_notes", "confidence"],
+        },
         "options": {"temperature": 0.1, "num_ctx": 8192, "think": False},
     }
 
@@ -321,13 +344,12 @@ Select the spans directly relevant to the topic."""
         response.raise_for_status()
         data = response.json()
 
-    msg = data["message"]
-    if msg.get("tool_calls"):
-        args = msg["tool_calls"][0]["function"]["arguments"]
-        if isinstance(args, str):
-            return _safe_parse_json(args)
-        return args
-    return _safe_parse_json(msg.get("content", ""))
+    content = data.get("message", {}).get("content", "")
+    result = json.loads(content)
+    if not isinstance(result.get("accepted_span_ids"), list):
+        logging.warning("Judge returned non-list accepted_span_ids; defaulting to []")
+        result["accepted_span_ids"] = []
+    return result
 
 
 def retrieve_topic_spans(
@@ -387,7 +409,10 @@ def retrieve_topic_spans(
     selection = _judge_topic_span_relevance(topic, candidate_spans)
 
     accepted_ids = []
-    for span_id in selection.get("accepted_span_ids", []):
+    raw_accepted = selection.get("accepted_span_ids", [])
+    if not isinstance(raw_accepted, list):
+        raw_accepted = []
+    for span_id in raw_accepted:
         if span_id in candidate_by_id and span_id not in accepted_ids:
             accepted_ids.append(span_id)
         elif span_id not in candidate_by_id:
@@ -395,7 +420,12 @@ def retrieve_topic_spans(
     accepted_ids = accepted_ids[:max_spans]
 
     rejected_spans = []
-    for item in selection.get("rejected_spans", []):
+    raw_rejected = selection.get("rejected_spans", [])
+    if not isinstance(raw_rejected, list):
+        raw_rejected = []
+    for item in raw_rejected:
+        if not isinstance(item, dict):
+            continue
         span_id = item.get("span_id", "")
         if span_id in candidate_by_id:
             rejected_spans.append({
@@ -643,6 +673,8 @@ def get_rag_context(
     retrieval_mode: str = "knowledge_base",
 ) -> str:
     """Return formatted curriculum context for a query, or '' if collection is empty."""
+    if not doc_id:
+        return ""
     spans = query_rag(
         query,
         n_results=n_results,

@@ -3,7 +3,7 @@ import base64
 import json
 import logging
 import os
-import uuid
+import hashlib
 from dotenv import load_dotenv
 load_dotenv()
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -189,7 +189,7 @@ async def chat_stream(req: ChatRequest):
 @app.post("/api/rag/ingest")
 async def rag_ingest(file: UploadFile = File(...)):
     data = await file.read()
-    doc_id = str(uuid.uuid4())
+    doc_id = hashlib.md5(data).hexdigest()
     result = await asyncio.to_thread(ingest_pdf_vision, data, file.filename or "upload.pdf", doc_id)
     return {
         "message": f"Indexed {result['chunks_indexed']} chunks from {result['filename']}",
