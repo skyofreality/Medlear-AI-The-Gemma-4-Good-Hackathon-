@@ -427,7 +427,7 @@ export default function SessionPage() {
                   onKeyDown={(e) => e.key === "Enter" && handleSend()}
                   placeholder="Type your answer..."
                   disabled={loading}
-                  className="flex-1 border border-gray-300 rounded-xl px-3 py-2 text-sm
+                  className="flex-1 border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-900
                              focus:outline-none focus:ring-2 focus:ring-teal-500
                              focus:border-transparent disabled:bg-gray-50"
                 />

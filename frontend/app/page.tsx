@@ -61,7 +61,7 @@ export default function Home() {
             MedLearn AI
           </h1>
           <p className="text-gray-500 text-base">
-            Your offline medical tutor. Speak, learn, understand.
+            Your AI medical tutor. Speak, learn, understand.
           </p>
         </div>
 
@@ -157,7 +157,7 @@ export default function Home() {
 
         {/* Footer */}
         <p className="text-center text-xs text-gray-400 mt-6">
-          Fully offline · Powered by Gemma 4 via Ollama
+          Powered by Gemma 4 via Ollama
         </p>
       </div>
     </main>
