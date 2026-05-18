@@ -13,3 +13,4 @@ __pycache__/
 *.wav
 .claude/
 CLAUDE.md
+backend/chroma_db/

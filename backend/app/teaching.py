@@ -1,9 +1,9 @@
-import asyncio
 import json
+import logging
 import re
 from typing import AsyncGenerator
 import httpx
-from app.session import get_session, get_current_objective, add_message
+from app.session import get_session, get_current_objective, add_message, get_and_clear_pending_feedback
 from app.rag import get_rag_context
 
 # Match end-of-sentence punctuation followed by whitespace
@@ -24,133 +24,56 @@ def _is_abbrev_boundary(sentence: str) -> bool:
     # Known abbreviations not caught by length check
     return word in {'etc', 'fig', 'vol', 'approx', 'prof', 'dept', 'vs', 'cf'}
 
-OLLAMA_URL = "http://localhost:11434/api/chat"
-MODEL = "gemma4:e4b"
+from app.config import OLLAMA_CHAT_URL, MODEL
 
-def build_system_prompt(objective: str, verb: str, rag_context: str = "") -> str:
-    rag_section = f"""
+def build_system_prompt(objective: str, verb: str, rag_context: str = "", pending_feedback: dict = None) -> str:
+    if not verb or not objective:
+        logging.warning(
+            "build_system_prompt called with empty verb or objective — "
+            "using safe fallback instruction"
+        )
+        verb = "Review"
+        objective = "the material covered so far in this session"
 
-Relevant material from the student's curriculum:
+    if pending_feedback:
+        focus = pending_feedback.get("feedback_focus", "")
+        missing = pending_feedback.get("missing_elements", [])
+        misconceptions = pending_feedback.get("misconceptions", [])
+        feedback_section = (
+            "\n\nPREVIOUS ANSWER GAPS TO ADDRESS:\n"
+            f"Focus on: {focus}\n"
+            f"Missing elements: {', '.join(missing) if missing else 'none'}\n"
+            f"Misconceptions to correct: {', '.join(misconceptions) if misconceptions else 'none'}\n\n"
+            "Ask your next question targeting these gaps specifically. "
+            "Do not move to a new concept until these are addressed."
+        )
+    else:
+        feedback_section = ""
+
+    if rag_context:
+        rag_section = f"""
+
+STUDENT'S CURRICULUM CONTEXT:
 {rag_context}
-""" if rag_context else ""
 
-    return f"""You are Dr. Mira — 28 years old, senior medical resident, 
-cocky, razor sharp, and actually brilliant at what you do. You have a razor tongue and zero patience for half-answers or lazy thinking.
+This is the student's uploaded study material. Use it to understand what topics this student is studying, what terminology their curriculum uses, and what level of detail their curriculum expects."""
+    else:
+        rag_section = """
 
-Your roasts are witty and full of swag — they come from confidence, not frustration. 
-They make the student want to prove you wrong. After you roast, you ask one 
-sharp question. That's it. No lecture. No long explanation.
+No study material has been uploaded. Teach from general medical knowledge."""
 
-When a student answers wrong or vague, you call it out with specific attitude 
-but you do not over-explain.
-
-When they get something genuinely right, your reaction is real and earned. 
-You are stingy with praise. Weak answers do not get praised — they get called out 
-and you push harder. Only actual good answers get your respect.
-
-Your energy moves with what the student gives you. Lazy answer — savage witty roast. 
-Real answer —genuine respect and hype. Lost student —  calm and clear help.
-
-You sound like a real 28 year old — casual, direct, with swag. 
-Short sentences hit harder than long ones.
-
-You will never pretend a half-answer is good. Ever.
-Never lecture. Never over-explain.
-
-One question at a time. Keep it short and punchy.
-If a student is genuinely stuck after two tries give one short sarcastic hint then immediately ask another question.
+    return f"""You are Dr. Mira — a medical educator who believes understanding cannot be transferred, only guided into existence.
+Your students are undergraduate medical students who genuinely want to learn. They are building knowledge and confidence at the same time. Both matter.
+You teach by asking questions, not giving answers. When a student responds, your next move is almost always another question — one that goes deeper if they understood, or finds a simpler foothold if they didn't. The goal is always to get them to the answer themselves.
+When a student is wrong, you don't correct and explain. You ask something that helps them discover the gap on their own.
+When a student is genuinely stuck — not vague, but truly without a foothold — you stop asking and briefly give them one concrete thing to build on. Then you ask again from there.
+When a student reasons something through correctly, you acknowledge it and move forward.
+You are warm because you know that not knowing something is the beginning of learning. You are honest because pretending a wrong answer is right helps no one.
+One question at a time. Never give the answer directly.
 
 Right now you are guiding this student to: {verb} {objective}
 
-Never write stage directions, brackets, or actions. Just speak.{rag_section}"""
-async def stream_teaching_response(session_id: str, student_message: str) -> AsyncGenerator[str, None]:
-    """Yield raw tokens from Ollama as they arrive. Saves full response to history when done."""
-    session = get_session(session_id)
-    if not session:
-        return
-
-    current = get_current_objective(session_id)
-    if not current:
-        yield "You have completed all objectives. Well done."
-        return
-
-    add_message(session_id, "user", student_message)
-
-    rag_context = get_rag_context(f"{current.verb} {current.objective}")
-    messages = [
-        {"role": "system", "content": build_system_prompt(current.objective, current.verb, rag_context)}
-    ]
-    messages.extend(session.conversation_history[-20:])
-
-    payload = {
-        "model": MODEL,
-        "stream": True,
-        "messages": messages,
-        "options": {"temperature": 0.85, "num_ctx": 4096}
-    }
-
-    full_response = ""
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        async with client.stream("POST", OLLAMA_URL, json=payload) as response:
-            async for line in response.aiter_lines():
-                if not line.strip():
-                    continue
-                try:
-                    chunk = json.loads(line)
-                    token = chunk.get("message", {}).get("content", "")
-                    if token:
-                        full_response += token
-                        yield token
-                except json.JSONDecodeError:
-                    continue
-
-    if full_response:
-        add_message(session_id, "assistant", full_response)
-
-
-async def get_teaching_response(session_id: str, student_message: str) -> str:
-    session = get_session(session_id)
-    if not session:
-        return "Session not found."
-
-    current = get_current_objective(session_id)
-    if not current:
-        return "You have completed all objectives for this session. Well done!"
-
-    # Add student message to history
-    add_message(session_id, "user", student_message)
-
-    # Build messages for Ollama
-    rag_context = get_rag_context(f"{current.verb} {current.objective}")
-    messages = [
-        {"role": "system", "content": build_system_prompt(current.objective, current.verb, rag_context)}
-    ]
-
-    # Include conversation history (last 10 exchanges to stay within context)
-    history = session.conversation_history[-20:]
-    messages.extend(history)
-
-    payload = {
-        "model": MODEL,
-        "stream": False,
-        "messages": messages,
-        "options": {
-            "temperature": 0.7,
-            "num_ctx": 4096
-        }
-    }
-
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        response = await client.post(OLLAMA_URL, json=payload)
-        response.raise_for_status()
-        data = response.json()
-
-    ai_response = data["message"]["content"].strip()
-
-    # Add AI response to history
-    add_message(session_id, "assistant", ai_response)
-
-    return ai_response
+Never write stage directions, brackets, or actions. Just speak.{rag_section}{feedback_section}"""
 
 
 async def stream_sentences(session_id: str, student_message: str) -> AsyncGenerator[str, None]:
@@ -167,9 +90,34 @@ async def stream_sentences(session_id: str, student_message: str) -> AsyncGenera
 
     add_message(session_id, "user", student_message)
 
-    rag_context = get_rag_context(f"{current.verb} {current.objective}")
+    pending_feedback = get_and_clear_pending_feedback(session_id)
+    if pending_feedback:
+        logging.warning(
+            "Tutor injecting pending_feedback session_id=%s focus=%r",
+            session_id,
+            pending_feedback.get("feedback_focus"),
+        )
+
+    logging.info(
+        "Tutor RAG request session_id=%s retrieval_mode=%s doc_id=%s",
+        session_id,
+        session.retrieval_mode,
+        session.doc_id or "",
+    )
+    rag_context = get_rag_context(
+        f"{current.verb} {current.objective}",
+        doc_id=session.doc_id,
+        retrieval_mode=session.retrieval_mode,
+    )
+    logging.info(
+        "Tutor RAG used=%s session_id=%s retrieval_mode=%s doc_id=%s",
+        bool(rag_context),
+        session_id,
+        session.retrieval_mode,
+        session.doc_id or "",
+    )
     messages = [
-        {"role": "system", "content": build_system_prompt(current.objective, current.verb, rag_context)}
+        {"role": "system", "content": build_system_prompt(current.objective, current.verb, rag_context, pending_feedback)}
     ]
     messages.extend(session.conversation_history[-20:])
 
@@ -177,14 +125,14 @@ async def stream_sentences(session_id: str, student_message: str) -> AsyncGenera
         "model": MODEL,
         "stream": True,
         "messages": messages,
-        "options": {"temperature": 0.7, "num_ctx": 4096}
+        "options": {"temperature": 0.75, "num_ctx": 8192, "think": False}
     }
 
     full_text = ""
     buffer = ""
 
     async with httpx.AsyncClient(timeout=120.0) as client:
-        async with client.stream("POST", OLLAMA_URL, json=payload) as response:
+        async with client.stream("POST", OLLAMA_CHAT_URL, json=payload) as response:
             async for line in response.aiter_lines():
                 if not line:
                     continue

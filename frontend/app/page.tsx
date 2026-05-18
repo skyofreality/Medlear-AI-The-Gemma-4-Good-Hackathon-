@@ -11,6 +11,7 @@ export default function Home() {
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [docId, setDocId] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   async function handleUpload() {
@@ -19,8 +20,10 @@ export default function Home() {
     setUploadStatus(null);
     try {
       const result = await ingestPDF(uploadFile);
+      setDocId(result.doc_id);
       setUploadStatus({ ok: true, msg: `Indexed ${result.chunks_indexed} chunks from ${result.filename}` });
     } catch (e: any) {
+      setDocId("");
       setUploadStatus({ ok: false, msg: e.message ?? "Upload failed" });
     } finally {
       setUploading(false);
@@ -29,15 +32,20 @@ export default function Home() {
 
   async function handleStart() {
     if (!topic.trim()) return;
+    if (uploadFile && !docId) {
+      setError("Index the selected PDF before starting, or remove it to use the knowledge base.");
+      return;
+    }
+    const retrievalMode = docId ? "uploaded_pdf" : "knowledge_base";
     setLoading(true);
     setError("");
     try {
-      const session = await startSession(topic);
+      const session = await startSession(topic, retrievalMode, docId || undefined);
       // Store session in localStorage for the chat page
       localStorage.setItem("medlearn_session", JSON.stringify(session));
       router.push("/session");
     } catch (e) {
-      setError("Failed to start session. Make sure the backend is running.");
+      setError(e instanceof Error ? e.message : "Failed to start session");
     } finally {
       setLoading(false);
     }
@@ -53,7 +61,7 @@ export default function Home() {
             MedLearn AI
           </h1>
           <p className="text-gray-500 text-base">
-            Your offline medical tutor. Speak, learn, understand.
+            Your AI medical tutor. Speak, learn, understand.
           </p>
         </div>
 
@@ -85,7 +93,7 @@ export default function Home() {
                        text-white font-medium py-3 rounded-xl transition-colors 
                        text-sm disabled:cursor-not-allowed"
           >
-            {loading ? "Building your session..." : "Start learning"}
+            {loading ? (docId ? "Analysing your PDF and finding relevant curriculum sections..." : "Preparing objectives from your curriculum...") : "Start learning"}
           </button>
 
           <div className="flex items-center gap-3 my-6">
@@ -102,7 +110,7 @@ export default function Home() {
             onDrop={(e) => {
               e.preventDefault();
               const f = e.dataTransfer.files[0];
-              if (f?.type === "application/pdf") { setUploadFile(f); setUploadStatus(null); }
+              if (f?.type === "application/pdf") { setUploadFile(f); setUploadStatus(null); setDocId(""); }
             }}
           >
             <input
@@ -114,6 +122,7 @@ export default function Home() {
                 const f = e.target.files?.[0] ?? null;
                 setUploadFile(f);
                 setUploadStatus(null);
+                setDocId("");
               }}
             />
             {uploadFile ? (
@@ -148,7 +157,7 @@ export default function Home() {
 
         {/* Footer */}
         <p className="text-center text-xs text-gray-400 mt-6">
-          Fully offline · Powered by Gemma 4 via Ollama
+          Powered by Gemma 4 via Ollama
         </p>
       </div>
     </main>

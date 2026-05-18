@@ -1,9 +1,16 @@
 "use client";
 import { useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
 
+export interface WordAlignment {
+  words: string[];
+  wtimes: number[];
+  wdurations: number[];
+}
+
 export interface AvatarHandle {
-  speak: (audioBase64: string, sentence: string) => Promise<void>;
+  speak: (audioBase64: string, sentence: string, alignment?: WordAlignment) => Promise<void>;
   stop: () => void;
+  interrupt: () => void;
   setMood: (mood: string) => void;
 }
 
@@ -19,7 +26,7 @@ const TalkingHeadAvatar = forwardRef<AvatarHandle, Props>((props, ref) => {
   const modelUrl = props.modelUrl ?? "/dani.glb";
 
   useImperativeHandle(ref, () => ({
-    speak: async (audioBase64: string, sentence: string) => {
+    speak: async (audioBase64: string, sentence: string, alignment?: WordAlignment) => {
       if (!headRef.current) return;
       props.onStart?.();
       try {
@@ -33,25 +40,48 @@ const TalkingHeadAvatar = forwardRef<AvatarHandle, Props>((props, ref) => {
 
         const audioBuffer = await headRef.current.audioCtx.decodeAudioData(bytes.buffer);
 
-        const durationMs = audioBuffer.duration * 1000;
-        const words = sentence.split(/\s+/)
-          .map(w => w.replace(/[^a-zA-Z0-9']/g, ''))
-          .filter(w => w.length > 0);
-        const wtimes: number[] = [];
-        const wdurations: number[] = [];
-        if (words.length === 1) {
-          wtimes.push(0);
-          wdurations.push(durationMs);
-        } else if (words.length > 1) {
-          const MIN_WORD_MS = 130;
-          const totalChars = words.reduce((sum, w) => sum + w.length, 0) || 1;
-          const flexMs = durationMs - MIN_WORD_MS * words.length;
-          let t = 0;
-          for (const w of words) {
-            const dur = MIN_WORD_MS + (w.length / totalChars) * flexMs;
-            wtimes.push(t);
-            wdurations.push(dur);
-            t += dur;
+        let words: string[];
+        let wtimes: number[];
+        let wdurations: number[];
+
+        if (alignment && alignment.words.length > 0) {
+          // Real per-word timing from Kokoro pred_dur — drives accurate visemes
+          words = alignment.words.map(w => w.replace(/[^a-zA-Z0-9']/g, '')).filter(w => w.length > 0);
+          wtimes = [...alignment.wtimes];
+          wdurations = [...alignment.wdurations];
+          // Trim back to whatever survived the strip
+          if (words.length !== alignment.words.length) {
+            const kept: { w: string; t: number; d: number }[] = [];
+            for (let i = 0; i < alignment.words.length; i++) {
+              const w = alignment.words[i].replace(/[^a-zA-Z0-9']/g, '');
+              if (w.length > 0) kept.push({ w, t: alignment.wtimes[i], d: alignment.wdurations[i] });
+            }
+            words = kept.map(k => k.w);
+            wtimes = kept.map(k => k.t);
+            wdurations = kept.map(k => k.d);
+          }
+        } else {
+          // Fallback: even-distribution synthesis from sentence text
+          const durationMs = audioBuffer.duration * 1000;
+          words = sentence.split(/\s+/)
+            .map(w => w.replace(/[^a-zA-Z0-9']/g, ''))
+            .filter(w => w.length > 0);
+          wtimes = [];
+          wdurations = [];
+          if (words.length === 1) {
+            wtimes.push(0);
+            wdurations.push(durationMs);
+          } else if (words.length > 1) {
+            const MIN_WORD_MS = 130;
+            const totalChars = words.reduce((sum, w) => sum + w.length, 0) || 1;
+            const flexMs = durationMs - MIN_WORD_MS * words.length;
+            let t = 0;
+            for (const w of words) {
+              const dur = MIN_WORD_MS + (w.length / totalChars) * flexMs;
+              wtimes.push(t);
+              wdurations.push(dur);
+              t += dur;
+            }
           }
         }
 
@@ -69,6 +99,11 @@ const TalkingHeadAvatar = forwardRef<AvatarHandle, Props>((props, ref) => {
       if (headRef.current) {
         headRef.current.stop();
         props.onComplete?.();
+      }
+    },
+    interrupt: () => {
+      if (headRef.current) {
+        headRef.current.stopSpeaking();
       }
     },
     setMood: (mood: string) => {
