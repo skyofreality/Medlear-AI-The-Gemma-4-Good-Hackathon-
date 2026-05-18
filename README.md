@@ -246,6 +246,7 @@ Student answer → Evaluator → "missing: role of troponin release"
 | Passive reading doesn't build reasoning | Socratic method forces the student to construct understanding |
 | Students don't know what they don't know | Bloom's objectives make the learning target explicit and trackable |
 | Generic AI tutors ignore the curriculum | Objectives are grounded in the student's own uploaded material |
+| Data privacy concerns block institutional adoption | Architecture is designed to deploy on a university's own servers — Ollama + ChromaDB + all models run on-premise, no student data or curriculum content ever leaves the institution |
 
 ---
 
